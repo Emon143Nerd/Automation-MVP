@@ -1,0 +1,99 @@
+# =====================================================================
+# SalesFixr — local stack
+#
+#   cd infra
+#   copy .env.example .env      (then edit it)
+#   docker compose up -d
+#   open http://localhost:5678
+#
+# The optional local Postgres is behind a profile, so by default you get
+# n8n only and your data lives in Neon:
+#   docker compose --profile localdb up -d
+# =====================================================================
+
+services:
+  n8n:
+    image: docker.n8n.io/n8nio/n8n:latest
+    container_name: sf-n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      # --- auth on the n8n UI ---
+      - N8N_BASIC_AUTH_ACTIVE=true
+      - N8N_BASIC_AUTH_USER=${N8N_BASIC_AUTH_USER}
+      - N8N_BASIC_AUTH_PASSWORD=${N8N_BASIC_AUTH_PASSWORD}
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+
+      # --- URLs ---
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+      - WEBHOOK_URL=${WEBHOOK_URL}
+      - N8N_EDITOR_BASE_URL=${WEBHOOK_URL}
+
+      # --- time ---
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+      - TZ=${TZ}
+
+      # --- behaviour ---
+      - N8N_DIAGNOSTICS_ENABLED=false
+      - N8N_RUNNERS_ENABLED=true
+      - EXECUTIONS_DATA_PRUNE=true
+      - EXECUTIONS_DATA_MAX_AGE=168          # keep 7 days of executions
+
+      # --- app values readable from Code nodes via $env ---
+      - SF_DATABASE_URL=${SF_DATABASE_URL}
+      - SF_PUBLIC_BASE_URL=${SF_PUBLIC_BASE_URL}
+      - SF_LLM_PROVIDER=${SF_LLM_PROVIDER}
+      - SF_GEMINI_MODEL=${SF_GEMINI_MODEL}
+      - SF_OLLAMA_BASE_URL=${SF_OLLAMA_BASE_URL}
+      - SF_OLLAMA_MODEL=${SF_OLLAMA_MODEL}
+      - SF_TOOL_TOKEN=${SF_TOOL_TOKEN}
+      - SF_META_VERIFY_TOKEN=${SF_META_VERIFY_TOKEN}
+      - SF_META_APP_SECRET=${SF_META_APP_SECRET}
+      - SF_META_PAGE_TOKEN=${SF_META_PAGE_TOKEN}
+      - SF_META_PAGE_ID=${SF_META_PAGE_ID}
+      - SF_META_GRAPH_VERSION=${SF_META_GRAPH_VERSION}
+      - SF_GOOGLE_CALENDAR_ID=${SF_GOOGLE_CALENDAR_ID}
+      - SF_TELEGRAM_CHAT_ID=${SF_TELEGRAM_CHAT_ID}
+      - SF_DEFAULT_TENANT_SLUG=${SF_DEFAULT_TENANT_SLUG}
+      # n8n hides env vars from Code nodes unless they are allow-listed:
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./n8n-files:/files            # scratch space you can read from the host
+
+    extra_hosts:
+      # lets the container reach Ollama running on your PC
+      - "host.docker.internal:host-gateway"
+
+  # ------------------------------------------------------------------
+  # Optional local Postgres. Only starts with:  --profile localdb
+  # Use it for offline work; Neon stays the one you demo.
+  # ------------------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: sf-postgres
+    profiles: ["localdb"]
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=${SF_LOCAL_PG_USER}
+      - POSTGRES_PASSWORD=${SF_LOCAL_PG_PASSWORD}
+      - POSTGRES_DB=${SF_LOCAL_PG_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      # everything in db/ runs automatically on FIRST start only
+      - ../db:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SF_LOCAL_PG_USER} -d ${SF_LOCAL_PG_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  n8n_data:
+  pg_data:

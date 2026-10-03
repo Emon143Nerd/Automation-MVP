@@ -1,0 +1,74 @@
+# =====================================================================
+# SalesFixr — environment
+# Copy to  infra/.env  and fill in. NEVER commit infra/.env
+# =====================================================================
+
+# ---------- n8n ----------
+# Change these before first run. This is the login for http://localhost:5678
+N8N_BASIC_AUTH_USER=admin
+N8N_BASIC_AUTH_PASSWORD=change-me-now
+
+# Must be a fixed 32+ char random string. If it changes, n8n can no longer
+# decrypt your saved credentials and you re-enter all of them.
+N8N_ENCRYPTION_KEY=generate-a-long-random-string-and-never-change-it
+
+GENERIC_TIMEZONE=America/New_York
+TZ=America/New_York
+
+# ---------- Public URL (Milestone G) ----------
+# Your ngrok static domain, with https:// and no trailing slash.
+SF_PUBLIC_BASE_URL=https://your-static-domain.ngrok-free.app
+# n8n needs this too, so it prints correct webhook URLs in the UI:
+WEBHOOK_URL=https://your-static-domain.ngrok-free.app
+
+# ---------- Application database (Milestone A) ----------
+# Neon pooled connection string.
+SF_DATABASE_URL=postgresql://neondb_owner:npg_6ez1tZYrvKji@ep-wild-firefly-b52w1to6-pooler.c-7.us-east-2.aws.neon.tech/neondb?sslmode=require&channel_binding=require
+
+# Local Docker Postgres (only if you use the optional 'postgres' service)
+SF_LOCAL_PG_USER=salesfixr
+SF_LOCAL_PG_PASSWORD=salesfixr_local_dev
+SF_LOCAL_PG_DB=salesfixr
+
+# ---------- AI (Milestone C) ----------
+# Google AI Studio (https://aistudio.google.com) — NOT the Google Cloud console.
+SF_LLM_PROVIDER=gemini
+SF_GEMINI_API_KEY=
+# Pin the exact current Flash model id from AI Studio.
+SF_GEMINI_MODEL=gemini-2.5-flash
+
+# Alternatives, swapped inside WF-10 only. Leave blank for MVP.
+SF_OPENAI_API_KEY=
+SF_ANTHROPIC_API_KEY=
+# Offline fallback: from inside the n8n container your PC is host.docker.internal
+SF_OLLAMA_BASE_URL=http://host.docker.internal:11434
+SF_OLLAMA_MODEL=qwen2.5:7b-instruct
+
+# ---------- Internal tool auth (Milestone E) ----------
+# Random string you invent. Every SF TOOL webhook checks it.
+SF_TOOL_TOKEN=generate-another-long-random-string
+
+# ---------- Google Calendar (Milestone E) ----------
+SF_GOOGLE_CLIENT_ID=
+SF_GOOGLE_CLIENT_SECRET=
+SF_GOOGLE_CALENDAR_ID=xxxxx@group.calendar.google.com
+
+# ---------- Telegram (Milestone F) ----------
+SF_TELEGRAM_BOT_TOKEN=
+SF_TELEGRAM_CHAT_ID=
+
+# ---------- Meta / Messenger (Milestone G) ----------
+SF_META_APP_ID=
+SF_META_APP_SECRET=
+SF_META_PAGE_ID=
+SF_META_PAGE_TOKEN=
+# A string you invent; Meta echoes it back during webhook verification.
+SF_META_VERIFY_TOKEN=sf_verify_change_me
+SF_META_GRAPH_VERSION=v21.0
+
+# ---------- ElevenLabs (Milestone I, later) ----------
+SF_ELEVENLABS_API_KEY=
+SF_ELEVENLABS_AGENT_ID=
+
+# ---------- Tenant ----------
+SF_DEFAULT_TENANT_SLUG=demo_clinic

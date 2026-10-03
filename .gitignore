@@ -1,0 +1,21 @@
+# secrets — never commit
+infra/.env
+infra/.env.*
+!infra/.env.example
+*.pem
+*.key
+
+# n8n local data
+infra/n8n-files/
+n8n_data/
+
+# os / editor
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/
+
+# scratch
+tmp/
+*.log
