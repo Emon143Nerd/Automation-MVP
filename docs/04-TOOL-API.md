@@ -107,7 +107,7 @@ If step 2 fails, the row stays `held` and expires on its own — no orphan booki
     "appointment_id": "uuid",
     "start_time": "2026-09-30T14:00:00+06:00",
     "service_display_name": "Dental Cleaning" },
-  "human_summary": "Booked: Dental Cleaning, Tue 30 Sep at 2:00 PM." }
+    "human_summary": "Booked: Dental Cleaning, Tue 30 Sep at 2:00 PM." }
 ```
 
 > The confirmation sent to the patient is generated **from `data`**, not from the

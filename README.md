@@ -18,8 +18,27 @@ that matters made by deterministic code, not by the model.
 | [docs/02-NAMING-CONVENTIONS.md](docs/02-NAMING-CONVENTIONS.md) | Node names, webhook paths, DB naming |
 | [docs/03-AI-ROLES-AND-PERSONAS.md](docs/03-AI-ROLES-AND-PERSONAS.md) | How owner vs customer awareness works |
 | [docs/04-TOOL-API.md](docs/04-TOOL-API.md) | The tool endpoint contract (chat + voice share it) |
-| [docs/05-MILESTONE-A.md](docs/05-MILESTONE-A.md) | **Current task.** Step-by-step build of the first milestone |
 | [docs/ORIGINAL-CONTEXT.md](docs/ORIGINAL-CONTEXT.md) | The original brief, kept for reference |
+
+## Build order
+
+Work through these in order. Each has an acceptance test; don't start the next
+one until the current one passes.
+
+| Milestone | Doc | Status |
+|---|---|---|
+| A — DB + n8n + WF-01 | [05-MILESTONE-A.md](docs/05-MILESTONE-A.md) | ✅ done |
+| B — Safety gate + audit | [06-MILESTONE-B.md](docs/06-MILESTONE-B.md) | 👈 **current** |
+| C — AI intent (Gemini) | 07-MILESTONE-C.md | not written yet |
+| D — Action router | 08-MILESTONE-D.md | not written yet |
+| E — Calendar + availability | 09-MILESTONE-E.md | not written yet |
+| F — Booking end-to-end | 10-MILESTONE-F.md | not written yet |
+| G — Real Messenger channel | 11-MILESTONE-G.md | not written yet |
+| H — Reminders | 12-MILESTONE-H.md | not written yet |
+| I — Voice (ElevenLabs) | after MVP | — |
+| J — Dashboard | after MVP | — |
+
+**MVP = A through H.**
 
 ## Layout
 
