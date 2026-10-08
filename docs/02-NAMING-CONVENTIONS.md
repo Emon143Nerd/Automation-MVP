@@ -24,6 +24,7 @@ breaks at 11 PM before a client demo, names are the only thing that saves you.
 | Prefix | Node type | Example |
 |---|---|---|
 | `WH` | Webhook | `WH Inbound Messenger` |
+| `TRG` | When Executed by Another Workflow (sub-workflow start) | `TRG Called By Workflow` |
 | `RESP` | Respond to Webhook | `RESP 200 EchoChallenge` |
 | `SET` | Edit Fields / Set | `SET Normalized Message` |
 | `FN` | Code | `FN Normalize Messenger Payload` |
@@ -142,7 +143,8 @@ opted_out            quiet_hours          rate_limited
 no_consent           duplicate_event      unknown_tenant
 slot_taken           slot_outside_hours   lead_time_too_short
 service_unknown      past_date            hold_expired
-llm_invalid_json     llm_timeout          tool_not_allowed
+llm_invalid_json     llm_timeout          llm_error
+tool_not_allowed
 escalated_medical    escalated_requested  ok
 ```
 

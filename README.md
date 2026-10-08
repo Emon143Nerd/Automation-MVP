@@ -5,7 +5,7 @@ A patient messages the clinic's Facebook Page; the system understands them, chec
 real availability, books the appointment, and tells the owner — with every decision
 that matters made by deterministic code, not by the model.
 
-**Status:** MVP build in progress. Currently at **Milestone A**.
+**Status:** MVP build in progress. Currently at **Milestone C**.
 
 ---
 
@@ -28,8 +28,8 @@ one until the current one passes.
 | Milestone | Doc | Status |
 |---|---|---|
 | A — DB + n8n + WF-01 | [05-MILESTONE-A.md](docs/05-MILESTONE-A.md) | ✅ done |
-| B — Safety gate + audit | [06-MILESTONE-B.md](docs/06-MILESTONE-B.md) | 👈 **current** |
-| C — AI intent (Gemini) | 07-MILESTONE-C.md | not written yet |
+| B — Safety gate + audit | [06-MILESTONE-B.md](docs/06-MILESTONE-B.md) | ✅ done |
+| C — AI intent (Gemini) | [07-MILESTONE-C.md](docs/07-MILESTONE-C.md) | 👈 **current** |
 | D — Action router | 08-MILESTONE-D.md | not written yet |
 | E — Calendar + availability | 09-MILESTONE-E.md | not written yet |
 | F — Booking end-to-end | 10-MILESTONE-F.md | not written yet |

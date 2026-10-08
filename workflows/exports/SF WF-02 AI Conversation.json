@@ -1,0 +1,243 @@
+{
+  "name": "SF WF-02 AI Conversation",
+  "nodes": [
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "correlation_id"
+            },
+            {
+              "name": "tenant_id"
+            },
+            {
+              "name": "contact_id"
+            },
+            {
+              "name": "staff_user_id"
+            },
+            {
+              "name": "actor_role"
+            },
+            {
+              "name": "channel"
+            },
+            {
+              "name": "message"
+            },
+            {
+              "name": "inbound_conversation_id"
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -480,
+        -160
+      ],
+      "id": "f3bcd12a-1bd0-467d-a875-1f28f18196ef",
+      "name": "TRG Called By Workflow"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH t AS (\n  SELECT id, timezone, (now() AT TIME ZONE timezone) AS local_now\n  FROM tenants\n  WHERE id = $1::uuid AND is_active\n),\np AS (\n  SELECT role, system_prompt, allowed_intents, allowed_tools, data_scope, max_reply_chars\n  FROM ai_personas\n  WHERE tenant_id = $1::uuid AND role = $3::actor_role_t AND is_active\n)\nSELECT\n  t.timezone                                               AS tenant_timezone,\n  to_char(t.local_now, 'YYYY-MM-DD')                       AS local_today,\n  to_char(t.local_now, 'HH24:MI')                          AS local_time_hhmm,\n  to_char(t.local_now, 'FMDay DD FMMonth YYYY, HH24:MI')   AS local_now_text,\n  s.clinic_name, s.address, s.phone_public,\n  s.max_days_in_advance, s.min_lead_time_minutes,\n\n  p.role::text                                             AS persona_role,\n  p.system_prompt,\n  p.allowed_intents::text[]                                AS allowed_intents,\n  p.allowed_tools,\n  COALESCE(p.data_scope, 'own')                            AS data_scope,\n  p.max_reply_chars,\n\n  c.full_name                                              AS contact_name,\n  c.is_new_patient,\n\n  (SELECT json_agg(json_build_object(\n            'code', sv.code, 'name', sv.display_name, 'minutes', sv.duration_minutes,\n            'price_minor', sv.price_minor, 'currency', sv.currency) ORDER BY sv.display_name)\n     FROM services sv\n    WHERE sv.tenant_id = t.id AND sv.is_active)            AS services,\n\n  (SELECT json_agg(json_build_object(\n            'weekday', bh.weekday,\n            'opens',   to_char(bh.opens_at,  'HH24:MI'),\n            'closes',  to_char(bh.closes_at, 'HH24:MI'),\n            'closed',  bh.is_closed) ORDER BY bh.weekday)\n     FROM business_hours bh\n    WHERE bh.tenant_id = t.id)                             AS hours,\n\n  (SELECT json_agg(json_build_object('q', f.question, 'a', f.answer))\n     FROM faqs f\n    WHERE f.tenant_id = t.id AND f.is_active\n      AND $3::actor_role_t = ANY (f.visible_to))           AS faqs,\n\n  -- Today + 7 days with names. The model has no calendar; this is how\n  -- \"tomorrow\" and \"next Friday\" become real dates.\n  (SELECT json_agg(json_build_object(\n            'date',  to_char(d, 'YYYY-MM-DD'),\n            'label', to_char(d, 'FMDay DD FMMon')) ORDER BY d)\n     FROM generate_series(t.local_now::date, t.local_now::date + 7, interval '1 day') AS d)\n                                                           AS next_days,\n\n  -- DATA SCOPE. 'tenant' (owner/staff) sees today's whole schedule with names.\n  -- Anything else — including a missing persona — sees only THIS contact's\n  -- bookings. It fails closed: if in doubt, the narrow query runs.\n  CASE WHEN p.data_scope = 'tenant' THEN\n    (SELECT json_agg(json_build_object(\n              'start',   to_char(a.start_time AT TIME ZONE t.timezone, 'FMDy DD FMMon HH24:MI'),\n              'service', a.service_code,\n              'status',  a.status,\n              'patient', c2.full_name) ORDER BY a.start_time)\n       FROM appointments a\n       JOIN contacts c2 ON c2.id = a.contact_id\n      WHERE a.tenant_id = t.id\n        AND a.status IN ('held','booked')\n        AND (a.start_time AT TIME ZONE t.timezone)::date = t.local_now::date)\n  ELSE\n    (SELECT json_agg(json_build_object(\n              'start',   to_char(a.start_time AT TIME ZONE t.timezone, 'FMDy DD FMMon HH24:MI'),\n              'service', a.service_code,\n              'status',  a.status) ORDER BY a.start_time)\n       FROM appointments a\n      WHERE a.tenant_id = t.id\n        AND a.contact_id = $2::uuid\n        AND a.status IN ('held','booked')\n        AND a.start_time > now())\n  END                                                      AS appointments,\n\n  CASE WHEN p.data_scope = 'tenant' THEN\n    (SELECT count(*) FROM conversations cv\n      WHERE cv.tenant_id = t.id AND cv.direction = 'inbound'\n        AND cv.created_at >= (date_trunc('day', t.local_now) AT TIME ZONE t.timezone))\n  END                                                      AS inbound_today,\n\n  -- Last 6 messages of THIS thread, oldest first, excluding the one we're answering.\n  (SELECT json_agg(json_build_object('dir', r.direction, 'role', r.actor_role, 'body', r.body)\n                   ORDER BY r.created_at)\n     FROM (SELECT direction, actor_role, body, created_at\n             FROM conversations\n            WHERE tenant_id = t.id\n              AND contact_id = $2::uuid\n              AND id IS DISTINCT FROM NULLIF($4, '')::uuid\n            ORDER BY created_at DESC\n            LIMIT 6) r)                                    AS recent\n\nFROM t\nJOIN clinic_settings s ON s.tenant_id = t.id\nJOIN contacts c        ON c.id = $2::uuid AND c.tenant_id = t.id\nLEFT JOIN p ON true;",
+        "options": {
+          "queryReplacement": "={{ [ $json.tenant_id, $json.contact_id, $json.actor_role, $json.inbound_conversation_id ?? '' ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -336,
+        96
+      ],
+      "id": "cbdf6e55-6009-47de-b42e-059f321a7a90",
+      "name": "PG Load AI Context",
+      "credentials": {
+        "postgres": {
+          "id": "BTi99ypRxjPBbjJy",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const req = $('TRG Called By Workflow').first().json;\nconst ctx = $input.first().json;                           // PG Load AI Context\n\nif (!ctx.system_prompt) {\n  // No active persona for this role. Fail loudly; WF-01 still answers the\n  // sender because its SUB node is set to Continue on error.\n  throw new Error(`No active ai_personas row for role \"${req.actor_role}\"`);\n}\n\nconst DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\nconst money = (minor, cur) =>\n  minor === 0 ? 'free'\n  : minor == null ? 'ask the office'\n  : (cur === 'USD' ? '$' : cur + ' ') + (minor / 100).toFixed(2).replace(/\\.00$/, '');\n\nconst tenantView = ctx.data_scope === 'tenant';\nconst intents = ctx.allowed_intents || ['unknown'];\n\n// ---------------------------------------------------------------------------\n// 1. SYSTEM PROMPT = persona text from the DB + our output contract.\n//    (The {{...}} below are plain text in a Code node, not n8n expressions.)\n// ---------------------------------------------------------------------------\nconst persona = String(ctx.system_prompt)\n  .replaceAll('{{clinic_name}}', ctx.clinic_name)\n  .replaceAll('{{max_reply_chars}}', String(ctx.max_reply_chars));\n\nconst contract = `\nOUTPUT FORMAT — absolute\nReturn ONE JSON object and nothing else, with these fields:\n- intent: exactly one of: ${intents.join(', ')}. If nothing fits, \"unknown\".\n- service_code: a code from SERVICES, or null. Never invent a code.\n- date: YYYY-MM-DD, worked out using the DATES list. null if no day was mentioned.\n- preferred_time: 24-hour HH:MM. null if no time was mentioned. A bare \"2\" or \"2pm\" means 14:00.\n- patient_name: only if the person states their own name, else null.\n- lookup_query: the patient name or phone number a staff member asked about, else null.\n- confidence: 0 to 1, how sure you are about the intent.\n- needs_human: true if they ask for a person, or you cannot help.\n- reply_text: what you would say back. Plain text, under ${ctx.max_reply_chars} characters.\n  Never say anything is booked, moved or cancelled. The system confirms that, not you.`;\n\n// ---------------------------------------------------------------------------\n// 2. CONTEXT BLOCK\n// ---------------------------------------------------------------------------\nconst lines = [];\n\nlines.push('=== CLINIC FACTS ===');\nlines.push(`Clinic: ${ctx.clinic_name}`);\nlines.push(`Timezone: ${ctx.tenant_timezone}`);\nlines.push(`Now: ${ctx.local_now_text}`);\nlines.push(`Address: ${ctx.address ?? 'ask the office'}`);\nlines.push(`Phone: ${ctx.phone_public ?? 'ask the office'}`);\nlines.push('Hours:');\nfor (const h of ctx.hours || []) {\n  lines.push(`  ${DAYS[h.weekday]}: ${h.closed ? 'CLOSED' : `${h.opens}-${h.closes}`}`);\n}\n\nlines.push('', '=== DATES (use these to resolve \"today\", \"tomorrow\", weekdays) ===');\n(ctx.next_days || []).forEach((d, i) => {\n  const tag = i === 0 ? 'today' : i === 1 ? 'tomorrow' : `in ${i} days`;\n  lines.push(`${d.label} = ${d.date}  (${tag})`);\n});\n\nlines.push('', '=== SERVICES (use only these codes) ===');\nfor (const s of ctx.services || []) {\n  lines.push(`${s.code} | ${s.name} | ${s.minutes} min | ${money(s.price_minor, s.currency)}`);\n}\n\nlines.push('', '=== FAQ ===');\nfor (const f of ctx.faqs || []) lines.push(`Q: ${f.q}`, `A: ${f.a}`);\n\nlines.push('', '=== WHO YOU ARE TALKING TO ===');\nlines.push(`Role: ${ctx.persona_role}`);\nlines.push(`Name: ${ctx.contact_name || 'unknown'}`);\nconst appts = (ctx.appointments || []).map(\n  (a) => `  ${a.start}  ${a.service}  (${a.status})${a.patient ? '  — ' + a.patient : ''}`\n);\nif (tenantView) {\n  lines.push(\"Today's schedule (all patients):\");\n  lines.push(...(appts.length ? appts : ['  no appointments today']));\n  lines.push(`Inbound messages today: ${ctx.inbound_today ?? 0}`);\n} else {\n  lines.push(`New patient: ${ctx.is_new_patient ? 'yes' : 'no'}`);\n  lines.push('Their upcoming appointments:');\n  lines.push(...(appts.length ? appts : ['  none']));\n}\n\nlines.push('', '=== RECENT CONVERSATION ===');\nconst recent = ctx.recent || [];\nif (!recent.length) lines.push('(this is the first message)');\nfor (const r of recent) {\n  const who = r.dir === 'outbound' ? 'you' : r.role === 'customer' ? 'patient' : r.role;\n  lines.push(`${who}: ${r.body}`);\n}\n\nlines.push('', '=== CURRENT MESSAGE ===');\nlines.push(req.message);\n\n// ---------------------------------------------------------------------------\n// 3. RESPONSE SCHEMA. The intent enum is THIS ROLE's allowed list, so a patient's\n//    model call cannot even express \"owner_schedule\". Node 5 re-checks anyway.\n// ---------------------------------------------------------------------------\nconst nullableString = (description) => ({ type: 'STRING', nullable: true, description });\n\nconst response_schema = {\n  type: 'OBJECT',\n  properties: {\n    intent:         { type: 'STRING', enum: intents },\n    service_code:   nullableString('code from SERVICES, or null'),\n    date:           nullableString('YYYY-MM-DD, or null'),\n    preferred_time: nullableString('HH:MM 24-hour, or null'),\n    patient_name:   nullableString('name the person stated, or null'),\n    lookup_query:   nullableString('who a staff member is asking about, or null'),\n    confidence:     { type: 'NUMBER' },\n    needs_human:    { type: 'BOOLEAN' },\n    reply_text:     { type: 'STRING' },\n  },\n  required: ['intent', 'service_code', 'date', 'preferred_time', 'patient_name',\n             'lookup_query', 'confidence', 'needs_human', 'reply_text'],\n};\n\nreturn [{\n  json: {\n    correlation_id: req.correlation_id,\n    system_prompt: persona.trim() + '\\n' + contract,\n    user_content: lines.join('\\n'),\n    response_schema,\n    temperature: 0.2,\n    max_output_tokens: 2048,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -144
+      ],
+      "id": "bef390af-1ce5-409e-8220-c9faa65fc776",
+      "name": "FN Build Prompt"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "AaVhhU4dsmeZ0nRL",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/AaVhhU4dsmeZ0nRL",
+          "cachedResultName": "SF WF-10 LLM Gateway"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        -48,
+        96
+      ],
+      "id": "32156f0e-9482-4f45-8bed-2f129b7d3ab3",
+      "name": "SUB Call WF-10 LLM",
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const llm = $input.first().json;                          // WF-10 result\nconst ctx = $('PG Load AI Context').first().json;\nconst req = $('TRG Called By Workflow').first().json;\n\n// Intents that need a real action (Milestones D–F). Until that action has run,\n// we must not let the model's sentence go out — it might claim success.\nconst ACTION_INTENTS = ['booking', 'reschedule', 'cancel',\n                        'owner_schedule', 'owner_report', 'owner_contact_lookup'];\n\nconst phone = ctx.phone_public || 'the office';\nconst T = {\n  fallback: `Sorry, I didn't quite get that. Could you say it another way? You can also call us on ${phone}.`,\n  medical:  `I'm sorry you're dealing with that. I can't give medical advice over chat. Please call us on ${phone} so our team can help, and if it's severe or getting worse, seek emergency care.`,\n  opt_out:  'If you would like to stop receiving messages from us, reply STOP.',\n  holding:  'Let me check that for you, one moment.',\n};\n\nconst flags = [];\nconst ai = (llm && llm.ok && llm.parsed) ? llm.parsed : null;\nconst out = {\n  intent: 'unknown', service_code: null, date: null, preferred_time: null,\n  patient_name: null, lookup_query: null, confidence: 0, needs_human: false,\n};\nlet draft = null;\nlet svc = null;\n\nconst toMin = (hhmm) => Number(hhmm.slice(0, 2)) * 60 + Number(hhmm.slice(3, 5));\n\nif (ai) {\n  // 1. Intent must be allowed for THIS role (the schema already restricts it;\n  //    this is the second lock, in case a provider ignores the schema).\n  if ((ctx.allowed_intents || []).includes(ai.intent)) out.intent = ai.intent;\n  else flags.push('intent_not_allowed');\n\n  // 2. Service must exist for this clinic.\n  svc = (ctx.services || []).find((s) => s.code === ai.service_code) || null;\n  if (ai.service_code && !svc) flags.push('service_unknown');\n  out.service_code = svc ? svc.code : null;\n\n  // 3. Date: real calendar date, not in the past, not too far ahead.\n  if (ai.date) {\n    const ms = Date.parse(`${ai.date}T00:00:00Z`);\n    const real = /^\\d{4}-\\d{2}-\\d{2}$/.test(ai.date) && !isNaN(ms)\n                 && new Date(ms).toISOString().slice(0, 10) === ai.date;   // rejects 2026-02-30\n    if (!real) {\n      flags.push('date_invalid');\n    } else {\n      const days = Math.round((ms - Date.parse(`${ctx.local_today}T00:00:00Z`)) / 86400000);\n      if (days < 0) flags.push('past_date');\n      else if (days > Number(ctx.max_days_in_advance)) flags.push('too_far_ahead');\n      else out.date = ai.date;\n    }\n  }\n\n  // 4. Time: valid HH:MM, inside opening hours for that weekday, respects lead time.\n  if (ai.preferred_time) {\n    if (!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(ai.preferred_time)) {\n      flags.push('time_invalid');\n    } else {\n      out.preferred_time = ai.preferred_time;\n      if (out.date) {\n        const weekday = new Date(`${out.date}T00:00:00Z`).getUTCDay();   // 0 = Sunday, same as business_hours\n        const h = (ctx.hours || []).find((x) => Number(x.weekday) === weekday);\n        const start = toMin(out.preferred_time);\n        const duration = svc ? Number(svc.minutes) : 0;\n        if (!h || h.closed) flags.push('clinic_closed');\n        else if (start < toMin(h.opens) || start + duration > toMin(h.closes)) flags.push('slot_outside_hours');\n        if (out.date === ctx.local_today &&\n            start < toMin(ctx.local_time_hhmm) + Number(ctx.min_lead_time_minutes)) {\n          flags.push('lead_time_too_short');\n        }\n      }\n    }\n  }\n\n  // 5. What's still missing for a booking? Milestone D asks for exactly these.\n  if (out.intent === 'booking') {\n    if (!out.service_code)   flags.push('missing_service');\n    if (!out.date)           flags.push('missing_date');\n    if (!out.preferred_time) flags.push('missing_time');\n  }\n\n  // 6. Small fields.\n  out.patient_name = typeof ai.patient_name === 'string' && ai.patient_name.trim()\n    ? ai.patient_name.trim().slice(0, 80) : null;\n  // A patient never gets to name someone else to look up (tool API rule 4).\n  out.lookup_query = ctx.data_scope === 'tenant' && typeof ai.lookup_query === 'string'\n    ? ai.lookup_query.trim().slice(0, 80) || null : null;\n  out.confidence = Math.max(0, Math.min(1, Number(ai.confidence) || 0));\n  out.needs_human = ai.needs_human === true;\n\n  draft = String(ai.reply_text || '').trim().slice(0, Number(ctx.max_reply_chars) || 600) || null;\n}\n\n// ---------------------------------------------------------------------------\n// Which sentence actually goes out. Fixed templates win wherever the stakes are\n// legal (medical, opt-out) or factual (anything that needs a real action).\n// ---------------------------------------------------------------------------\nlet reply, source;\nlet reason = ai ? 'ok' : (llm?.reason_code || 'llm_error');\n\nif (!ai) {\n  reply = T.fallback; source = 'template';\n} else if (out.intent === 'medical_question') {\n  reply = T.medical; source = 'template';\n  out.needs_human = true;\n  reason = 'escalated_medical';\n} else if (out.intent === 'opt_out') {\n  // Only the exact keyword (handled by the gate) unsubscribes. \"Please stop\n  // messaging me\" gets told how — the model never flips consent.\n  reply = T.opt_out; source = 'template';\n} else if (ACTION_INTENTS.includes(out.intent)) {\n  // Milestone D replaces this with the result of the real action.\n  reply = T.holding; source = 'template';\n} else {\n  reply = draft || T.fallback; source = draft ? 'ai' : 'template';\n}\n\nreturn [{\n  json: {\n    correlation_id: req.correlation_id,\n    tenant_id:      req.tenant_id,\n    contact_id:     req.contact_id,\n    actor_role:     req.actor_role,\n    persona_role:   ctx.persona_role,\n    ai_ok:          !!ai,\n    reason_code:    reason,\n    ...out,\n    validation_flags: flags,\n    reply_text:     reply,\n    reply_source:   source,                                 // 'ai' | 'template'\n    reply_is_final: !ACTION_INTENTS.includes(out.intent),   // false = Milestone D must act first\n    draft_reply:    draft,                                  // what the model wanted to say\n    // For PG Save AI Result only; stripped before returning to WF-01.\n    ai_payload: { proposed: llm?.parsed ?? null, accepted: out, flags },\n    audit_details: {\n      actor_role: req.actor_role,\n      persona_role: ctx.persona_role,\n      intent: out.intent,\n      confidence: out.confidence,\n      validation_flags: flags,\n      reply_source: source,\n      llm_reason: llm?.reason_code ?? 'llm_error',\n      model: llm?.model ?? null,\n      model_version: llm?.model_version ?? null,\n      attempt: llm?.attempt ?? null,\n      latency_ms: llm?.latency_ms ?? null,\n      finish_reason: llm?.finish_reason ?? null,\n      total_tokens: llm?.usage?.totalTokenCount ?? null,\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        96,
+        -176
+      ],
+      "id": "b56b0fe6-ee28-4c26-b3bb-b9433a16148e",
+      "name": "FN Validate AI Output"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH upd AS (\n  UPDATE conversations\n     SET intent = $4::intent_t,\n         ai_payload = $5::jsonb\n   WHERE tenant_id = $1::uuid\n     AND id = NULLIF($3, '')::uuid\n  RETURNING id\n),\noutb AS (\n  INSERT INTO conversations\n    (tenant_id, contact_id, actor_role, channel, direction, body, message_type, intent)\n  SELECT $1::uuid, $2::uuid, 'system', $6::channel_t, 'outbound', $7, 'text', $4::intent_t\n  WHERE NULLIF($7, '') IS NOT NULL\n  RETURNING id\n)\nINSERT INTO audit_logs\n  (tenant_id, contact_id, workflow, action, status, reason_code, correlation_id, details)\nVALUES\n  ($1::uuid, $2::uuid, 'WF-02', 'ai_intent', $8, $9, $10, $11::jsonb)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.tenant_id, $json.contact_id, $('TRG Called By Workflow').first().json.inbound_conversation_id ?? '', $json.intent, JSON.stringify($json.ai_payload), $('TRG Called By Workflow').first().json.channel, $json.reply_text ?? '', ($json.ai_ok ? 'ok' : 'error'), $json.reason_code, $json.correlation_id, JSON.stringify($json.audit_details) ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        256,
+        128
+      ],
+      "id": "a3908bbe-0632-4f15-9248-85e450c59287",
+      "name": "PG Save AI Result",
+      "credentials": {
+        "postgres": {
+          "id": "BTi99ypRxjPBbjJy",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const { ai_payload, audit_details, ...result } = $('FN Validate AI Output').first().json;\nreturn [{ json: result }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        368,
+        -176
+      ],
+      "id": "8982548f-dec9-4057-bc5b-544d686cf738",
+      "name": "FN Return AI Result"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "TRG Called By Workflow": {
+      "main": [
+        [
+          {
+            "node": "PG Load AI Context",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG Load AI Context": {
+      "main": [
+        [
+          {
+            "node": "FN Build Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Build Prompt": {
+      "main": [
+        [
+          {
+            "node": "SUB Call WF-10 LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SUB Call WF-10 LLM": {
+      "main": [
+        [
+          {
+            "node": "FN Validate AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Validate AI Output": {
+      "main": [
+        [
+          {
+            "node": "PG Save AI Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG Save AI Result": {
+      "main": [
+        [
+          {
+            "node": "FN Return AI Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "4e67e8be-8db1-4adb-84d6-351b6c183af3",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "c2b01c85c95930b9e6ce58c18632c72ea8ea6a890722a1d5aa91cc474976a858"
+  },
+  "nodeGroups": [],
+  "id": "n0Z3RNLkcRhgds8j",
+  "tags": []
+}

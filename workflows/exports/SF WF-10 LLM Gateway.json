@@ -1,0 +1,241 @@
+{
+  "name": "SF WF-10 LLM Gateway",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\n\n// Model id: per-call override (used only for testing the error path), else .env.\nconst model = String(input.model || $env.SF_GEMINI_MODEL || '').replace(/^models\\//, '');\nif (!model) {\n  throw new Error('SF_GEMINI_MODEL is not set. Add it to infra/.env and run: docker compose up -d');\n}\n\nconst body = {\n  systemInstruction: { parts: [{ text: String(input.system_prompt || '') }] },\n  contents: [{ role: 'user', parts: [{ text: String(input.user_content || '') }] }],\n  generationConfig: {\n    // Low temperature: we want the same sentence to classify the same way every time.\n    temperature: input.temperature ?? 0.2,\n    // Generous on purpose. Some Flash models \"think\" before answering, and that\n    // thinking is counted against this limit. Too low a limit cuts the JSON off\n    // halfway, which shows up as llm_invalid_json.\n    maxOutputTokens: input.max_output_tokens ?? 2048,\n    // JSON mode: the reply is guaranteed to be JSON matching response_schema.\n    responseMimeType: 'application/json',\n    responseSchema: input.response_schema,\n  },\n};\n\nreturn [{\n  json: {\n    correlation_id: input.correlation_id ?? null,\n    model,\n    url: `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,\n    body,\n    started_at: Date.now(),   // for latency_ms in the audit log\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -304,
+        64
+      ],
+      "id": "b063eab6-a167-4696-90be-a27886c2c247",
+      "name": "FN Build Gemini Request"
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -464,
+        -112
+      ],
+      "id": "7d8e76c6-3b4a-490b-bb9b-d22dfebaf5e1",
+      "name": "TRG Called By Workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "const res = $input.first().json;\nconst req = $('FN Build Gemini Request').first().json;\n\n// Which attempt is this? The retry node only runs on the second pass.\n// (try/catch so this node still works while you're building, before node 6 exists.)\nlet attempt = 1;\ntry { if ($('HTTP Call Gemini (retry)').isExecuted) attempt = 2; } catch (e) {}\n\nlet reason = 'ok';\nlet parsed = null;\nlet finish = null;\nlet raw = null;\n\nif (res.error !== undefined) {\n  // The HTTP node failed after its own retries (On Error = Continue).\n  const msg = typeof res.error === 'string'\n    ? res.error\n    : (res.error.message || JSON.stringify(res.error));\n  reason = /timeout|timed out|ETIMEDOUT|ECONNABORTED/i.test(msg) ? 'llm_timeout' : 'llm_error';\n  raw = msg;\n} else {\n  const cand = (res.candidates || [])[0];\n  finish = cand?.finishReason ?? res.promptFeedback?.blockReason ?? 'NO_CANDIDATE';\n\n  // Join the text parts, skipping any \"thought\" parts some models include.\n  raw = (cand?.content?.parts || [])\n    .filter((p) => !p.thought && typeof p.text === 'string')\n    .map((p) => p.text)\n    .join('');\n\n  try {\n    // Defensive: strip ```json fences in case a model ever adds them.\n    const cleaned = raw.trim().replace(/^```(?:json)?\\s*/i, '').replace(/\\s*```$/, '');\n    parsed = JSON.parse(cleaned);\n    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {\n      throw new Error('not a JSON object');\n    }\n  } catch (e) {\n    parsed = null;\n    reason = 'llm_invalid_json';\n  }\n}\n\nreturn [{\n  json: {\n    ok: reason === 'ok',\n    reason_code: reason,\n    parsed,\n    // Retry ONLY bad JSON, and only once. Network/429 errors were already\n    // retried by the HTTP node itself; retrying them again just doubles the wait.\n    retry: reason === 'llm_invalid_json' && attempt < 2,\n    attempt,\n    model: req.model,\n    model_version: res.modelVersion ?? null,\n    finish_reason: finish,\n    latency_ms: Date.now() - req.started_at,\n    usage: res.usageMetadata ?? null,\n    raw_text: reason === 'ok' ? null : String(raw ?? '').slice(0, 500),\n    correlation_id: req.correlation_id,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        32,
+        176
+      ],
+      "id": "9ca15ae4-44b4-4090-9fac-d5ba91114cff",
+      "name": "FN Parse Gemini Response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "f212b7ea-791a-4609-938f-87eb58bb7d9a",
+              "leftValue": "={{ $json.retry }}",
+              "rightValue": "=",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        128,
+        -176
+      ],
+      "id": "ee9f737d-a246-40a3-b07f-310921a6725b",
+      "name": "IF Retry Needed"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('FN Build Gemini Request').first().json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('FN Build Gemini Request').first().json.body) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -160,
+        -144
+      ],
+      "id": "200ed06f-cc03-43ac-bfef-44e51e91427f",
+      "name": "HTTP Call Gemini",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bY9aDPpUg83OE8LI",
+          "name": "SalesFixr Gemini"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const { retry, ...result } = $input.first().json;\nreturn [{ json: result }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        384,
+        16
+      ],
+      "id": "a868d0b1-af16-4a8b-94b3-d26c417316a2",
+      "name": "FN Return LLM Result"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('FN Build Gemini Request').first().json.url }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($('FN Build Gemini Request').first().json.body) }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        496,
+        -224
+      ],
+      "id": "0ab5e048-b9d6-470f-9e09-f3331932d29e",
+      "name": "HTTP Call Gemini (retry)",
+      "retryOnFail": true,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "bY9aDPpUg83OE8LI",
+          "name": "SalesFixr Gemini"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "FN Build Gemini Request": {
+      "main": [
+        [
+          {
+            "node": "HTTP Call Gemini",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TRG Called By Workflow": {
+      "main": [
+        [
+          {
+            "node": "FN Build Gemini Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Parse Gemini Response": {
+      "main": [
+        [
+          {
+            "node": "IF Retry Needed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Retry Needed": {
+      "main": [
+        [
+          {
+            "node": "HTTP Call Gemini (retry)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FN Return LLM Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Call Gemini": {
+      "main": [
+        [
+          {
+            "node": "FN Parse Gemini Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Call Gemini (retry)": {
+      "main": [
+        [
+          {
+            "node": "FN Parse Gemini Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "b6424bea-d60c-438f-92fd-59128ab4504e",
+  "meta": {
+    "instanceId": "c2b01c85c95930b9e6ce58c18632c72ea8ea6a890722a1d5aa91cc474976a858"
+  },
+  "nodeGroups": [],
+  "id": "AaVhhU4dsmeZ0nRL",
+  "tags": []
+}

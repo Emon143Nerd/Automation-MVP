@@ -3,49 +3,17 @@
   "nodes": [
     {
       "parameters": {
-        "httpMethod": "POST",
-        "path": "salesfixr/v1/inbound/test",
-        "responseMode": "responseNode",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.webhook",
-      "typeVersion": 2.1,
-      "position": [
-        -608,
-        0
-      ],
-      "id": "36024b98-e31b-4114-bc70-fab91ef5540a",
-      "name": "WH-Inbound_Test",
-      "webhookId": "bdc39d9d-39df-4040-bdbd-52a60ecde623"
-    },
-    {
-      "parameters": {
         "jsCode": "// FN Normalize Inbound\n// Converts any inbound payload into the SalesFixr standard envelope.\n// See docs/02-NAMING-CONVENTIONS.md §5.\n\n// n8n's Code node sandbox does not expose the global `crypto` object, so we\n// generate a v4 UUID by hand. Math.random is fine here: correlation_id is a\n// debugging trace id, not a secret or a security token.\nfunction uuidv4() {\n  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {\n    const r = (Math.random() * 16) | 0;\n    const v = c === 'x' ? r : (r & 0x3) | 0x8;\n    return v.toString(16);\n  });\n}\n\nconst out = [];\n\nfor (const item of $input.all()) {\n  const body = item.json.body ?? item.json;\n\n  // --- test channel (Milestone A) ---------------------------------\n  const channel = (body.channel || 'test').toLowerCase();\n\n  // Phones must be E.164. Strip anything that isn't a digit or '+'.\n  const rawPhone = String(body.phone ?? '').trim();\n  const phone = rawPhone ? rawPhone.replace(/[^\\d+]/g, '') : null;\n\n  // Identify the sender. For the test channel we use the phone;\n  // Messenger will use the PSID instead.\n  const externalContactId = String(\n    body.external_contact_id ?? phone ?? 'anonymous'\n  );\n\n  out.push({\n    json: {\n      correlation_id: uuidv4(),\n      tenant_slug: body.tenant_slug || $env.SF_DEFAULT_TENANT_SLUG || 'demo_clinic',\n      channel,\n      external_contact_id: externalContactId,\n      external_message_id: body.external_message_id ?? null,\n      name: body.name ?? null,\n      phone_e164: phone,\n      message: String(body.message ?? '').trim(),\n      message_type: body.message_type || 'text',\n      received_at: new Date().toISOString(),\n      reply_to: { channel, address: externalContactId },\n    },\n  });\n}\n\nreturn out;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -400,
-        0
+        -816,
+        -176
       ],
       "id": "3bbdef1b-6e5c-4f85-bb06-a924e7a904f7",
       "name": "FN Normalize Inbound",
       "notesInFlow": false
-    },
-    {
-      "parameters": {
-        "respondWith": "json",
-        "responseBody": "={\n  \"ok\": true,\n  \"correlation_id\": \"{{ $('FN Normalize Inbound').first().json.correlation_id }}\",\n  \"contact_id\": \"{{ $('PG Resolve Contact And Role').first().json.contact_id }}\",\n  \"actor_role\": \"{{ $('PG Resolve Contact And Role').first().json.actor_role }}\",\n  \"is_new_contact\": {{ $('PG Resolve Contact And Role').first().json.is_new_contact }}\n}",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1.5,
-      "position": [
-        192,
-        0
-      ],
-      "id": "7d61836f-77e1-4c1f-8bb4-b361427936f8",
-      "name": "Respond Ack"
     },
     {
       "parameters": {
@@ -58,8 +26,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        -32,
-        0
+        -576,
+        -192
       ],
       "id": "fcac0d0e-92de-4f0c-95c7-d86a8a8a38d3",
       "name": "PG Insert Inbound Message",
@@ -76,14 +44,14 @@
         "operation": "executeQuery",
         "query": "WITH t AS (\n  SELECT id, timezone FROM tenants WHERE slug = $1 AND is_active\n),\nexisting AS (\n  SELECT c.id AS contact_id\n  FROM contacts c, t\n  WHERE c.tenant_id = t.id\n    AND (\n      c.id IN (\n        SELECT ci.contact_id FROM contact_identities ci\n        WHERE ci.tenant_id = t.id\n          AND ci.channel = $2::channel_t\n          AND ci.external_contact_id = $3\n      )\n      OR (NULLIF($5,'') IS NOT NULL AND c.phone_e164 = $5)\n    )\n  LIMIT 1\n),\nnew_contact AS (\n  INSERT INTO contacts (tenant_id, full_name, phone_e164, preferred_channel, timezone)\n  SELECT t.id, NULLIF($4,''), NULLIF($5,''), $2::channel_t, t.timezone\n  FROM t\n  WHERE NOT EXISTS (SELECT 1 FROM existing)\n  RETURNING id\n),\nresolved AS (\n  SELECT contact_id AS id FROM existing\n  UNION ALL\n  SELECT id FROM new_contact\n),\nnew_identity AS (\n  INSERT INTO contact_identities (tenant_id, contact_id, channel, external_contact_id, display_name)\n  SELECT t.id, r.id, $2::channel_t, $3, NULLIF($4,'')\n  FROM t, resolved r\n  ON CONFLICT (tenant_id, channel, external_contact_id) DO NOTHING\n  RETURNING contact_id\n),\nstaff AS (\n  SELECT su.id AS staff_user_id, su.role\n  FROM staff_users su, t\n  WHERE su.tenant_id = t.id\n    AND su.is_active\n    AND su.channel = $2::channel_t\n    AND su.external_contact_id = $3\n  LIMIT 1\n)\nSELECT\n  t.id                                                   AS tenant_id,\n  t.timezone                                             AS tenant_timezone,\n  r.id                                                   AS contact_id,\n  (SELECT staff_user_id FROM staff)                      AS staff_user_id,\n  COALESCE((SELECT role::text FROM staff), 'customer')   AS actor_role,\n  NOT EXISTS (SELECT 1 FROM existing)                    AS is_new_contact\n  FROM t, resolved r;\n\n",
         "options": {
-          "queryReplacement": "=``` {{ $json.tenant_slug }}\n    {{ $json.channel }} \n    {{ $json.external_contact_id }} \n    {{ $json.name ?? '' }} \n    {{ $json.phone_e164 ?? '' }}\n```"
+          "queryReplacement": "={{ [ $json.tenant_slug, $json.channel, $json.external_contact_id, $json.name ?? '', $json.phone_e164 ?? '' ] }}"
         }
       },
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        -224,
-        0
+        -704,
+        64
       ],
       "id": "705cd991-2c1c-4a9e-a4bf-b232f3a9c8e8",
       "name": "PG Resolve Contact And Role",
@@ -93,21 +61,327 @@
           "name": "Postgres account"
         }
       }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "salesfixr/v1/inbound/test",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -928,
+        96
+      ],
+      "id": "36024b98-e31b-4114-bc70-fab91ef5540a",
+      "name": "WH-Inbound-Test",
+      "webhookId": "bdc39d9d-39df-4040-bdbd-52a60ecde623"
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"ok\": true,\n  \"correlation_id\": \"{{ $('FN Safety Gate').first().json.correlation_id }}\",\n  \"contact_id\": \"{{ $('FN Safety Gate').first().json.contact_id }}\",\n  \"actor_role\": \"{{ $('FN Safety Gate').first().json.actor_role }}\",\n  \"gate_decision\": \"{{ $('FN Safety Gate').first().json.gate_decision }}\",\n  \"reason_code\": \"{{ $('FN Safety Gate').first().json.reason_code }}\",\n  \"reply_text\": {{ JSON.stringify(($('SUB Call WF-02 AI').isExecuted ? $('SUB Call WF-02 AI').first().json.reply_text : $('FN Safety Gate').first().json.reply_text) ?? null) }},\n  \"ai\": {{ JSON.stringify(($('SUB Call WF-02 AI').isExecuted ? $('SUB Call WF-02 AI').first().json : null) ?? null) }}\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.5,
+      "position": [
+        368,
+        -144
+      ],
+      "id": "7d61836f-77e1-4c1f-8bb4-b361427936f8",
+      "name": "RESP Ack"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT\n  t.id                                     AS tenant_id,\n  t.timezone                               AS tenant_timezone,\n  (now() AT TIME ZONE t.timezone)::time    AS local_time,\n  s.max_msgs_per_contact_per_day,\n  c.opted_out,\n  c.appointment_consent,\n  c.marketing_consent,\n  (c.ai_paused_until IS NOT NULL AND c.ai_paused_until > now()) AS ai_paused,\n  CASE WHEN s.quiet_hours_start > s.quiet_hours_end\n       THEN ((now() AT TIME ZONE t.timezone)::time >= s.quiet_hours_start\n             OR (now() AT TIME ZONE t.timezone)::time <  s.quiet_hours_end)\n       ELSE ((now() AT TIME ZONE t.timezone)::time >= s.quiet_hours_start\n             AND (now() AT TIME ZONE t.timezone)::time <  s.quiet_hours_end)\n  END                                      AS in_quiet_hours,\n  (SELECT count(*) FROM conversations cv\n     WHERE cv.tenant_id = t.id AND cv.contact_id = c.id\n       AND cv.direction = 'inbound'\n       AND cv.created_at > now() - interval '24 hours') AS inbound_24h\nFROM tenants t\nJOIN clinic_settings s ON s.tenant_id = t.id\nJOIN contacts c        ON c.id = $2::uuid\nWHERE t.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('PG Resolve Contact And Role').first().json.tenant_id, $('PG Resolve Contact And Role').first().json.contact_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        -448,
+        128
+      ],
+      "id": "e13433b5-06d2-4f95-933a-41917a1f30e5",
+      "name": "PG Load Gate Context",
+      "credentials": {
+        "postgres": {
+          "id": "BTi99ypRxjPBbjJy",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const gate = $input.first().json;                                   // PG Load Gate Context\nconst msg  = $('FN Normalize Inbound').first().json;\nconst who  = $('PG Resolve Contact And Role').first().json;\nconst role = who.actor_role;\n\n// Normalise for keyword matching: letters and spaces only, collapsed.\nconst normalized = String(msg.message || '')\n  .toUpperCase()\n  .replace(/[^A-Z ]/g, '')\n  .replace(/\\s+/g, ' ')\n  .trim();\n\n// Exact single-phrase matches only.\n// NOTE: 'CANCEL' is deliberately NOT an opt-out keyword here. In a booking\n// bot, \"cancel\" almost always means \"cancel my appointment\". Treating it as\n// an unsubscribe would silently mute patients who were trying to reschedule.\nconst OPT_OUT = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'OPTOUT', 'OPT OUT', 'QUIT', 'END'];\nconst OPT_IN  = ['START', 'UNSTOP', 'RESUME'];\n\nlet decision = 'allow';\nlet reason   = 'ok';\nlet reply    = null;\n\nconst isStaff = role === 'owner' || role === 'staff';\n\nif (OPT_OUT.includes(normalized)) {\n  // Always honoured, for everyone, immediately. No exceptions, no confirmation step.\n  decision = 'opt_out';\n  reason   = 'opt_out_requested';\n  reply    = 'You have been unsubscribed and will not receive further messages. Reply START to resume.';\n\n} else if (OPT_IN.includes(normalized) && gate.opted_out === true) {\n  decision = 'opt_in';\n  reason   = 'opt_in_requested';\n  reply    = 'You are resubscribed. How can we help?';\n\n} else if (gate.ai_paused === true) {\n  // A human has taken this thread over. Stay silent so we don't talk over them.\n  decision = 'block';\n  reason   = 'escalated_requested';\n\n} else if (!isStaff && gate.opted_out === true) {\n  decision = 'block';\n  reason   = 'opted_out';\n\n} else if (!isStaff && Number(gate.inbound_24h) > Number(gate.max_msgs_per_contact_per_day)) {\n  decision = 'block';\n  reason   = 'rate_limited';\n}\n\n// Staff and owner bypass opt-out and rate limiting. They cannot unsubscribe\n// from their own operations assistant, and they legitimately send bursts.\n// They do NOT bypass ai_paused: if a human owns the thread, nobody automates it.\n\nreturn [{\n  json: {\n    correlation_id: msg.correlation_id,\n    tenant_id:      who.tenant_id,\n    contact_id:     who.contact_id,\n    actor_role:     role,\n    gate_decision:  decision,          // allow | block | opt_out | opt_in\n    reason_code:    reason,\n    reply_text:     reply,             // null unless we owe a policy reply\n    // carried for the audit row and for Milestone H\n    in_quiet_hours: gate.in_quiet_hours,\n    inbound_24h:    Number(gate.inbound_24h),\n    local_time:     gate.local_time,\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -320,
+        -176
+      ],
+      "id": "ccdee4fa-1ca7-4451-a141-03717523c491",
+      "name": "FN Safety Gate"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.gate_decision }}",
+                    "rightValue": "opt_out",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "9948bb3b-dc5d-4ab0-9b17-b3c476907d2e"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "opt_out"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "083338d8-db01-4c42-a3c5-506e7243bce5",
+                    "leftValue": "={{ $json.gate_decision }}",
+                    "rightValue": "opt_in",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "opt_in"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "4ff515af-6064-4149-9d1c-08a458092f3d",
+                    "leftValue": "={{ $json.gate_decision }}",
+                    "rightValue": "block",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "block"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -176,
+        32
+      ],
+      "id": "6ed1f787-1ecd-4fac-a398-433cbbc38995",
+      "name": "SW Gate Decision"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH upd AS (\n  UPDATE contacts\n     SET opted_out    = ($3 = 'opt_out'),\n         opted_out_at = CASE WHEN $3 = 'opt_out' THEN now() ELSE NULL END,\n         marketing_consent = CASE WHEN $3 = 'opt_out' THEN false ELSE marketing_consent END\n   WHERE tenant_id = $1::uuid AND id = $2::uuid\n  RETURNING id, opted_out\n)\nINSERT INTO consents (tenant_id, contact_id, channel, purpose, consent, source, evidence)\nSELECT $1::uuid, $2::uuid, $4::channel_t, 'marketing',\n       ($3 = 'opt_in'), $3,\n       jsonb_build_object('message', $5, 'correlation_id', $6)\nFROM upd\nRETURNING contact_id, consent;",
+        "options": {
+          "queryReplacement": "={{ [ $json.tenant_id, $json.contact_id, $json.gate_decision, $('FN Normalize Inbound').first().json.channel, $('FN Normalize Inbound').first().json.message, $json.correlation_id ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        64,
+        -144
+      ],
+      "id": "def93c34-eb52-4dc2-b47a-d2f6aa7b98ee",
+      "name": "PG Apply Opt Out",
+      "credentials": {
+        "postgres": {
+          "id": "BTi99ypRxjPBbjJy",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO audit_logs\n  (tenant_id, contact_id, workflow, action, status, reason_code, correlation_id, details)\nVALUES\n  ($1::uuid, $2::uuid, 'WF-01', 'safety_gate', $3, $4, $5,\n   jsonb_build_object(\n     'actor_role',     $6,\n     'channel',        $7,\n     'in_quiet_hours', $8::boolean,\n     'inbound_24h',    $9::int,\n     'local_time',     $10\n   ))\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $('FN Safety Gate').first().json.tenant_id, $('FN Safety Gate').first().json.contact_id, ($('FN Safety Gate').first().json.gate_decision === 'block' ? 'blocked' : 'ok'), $('FN Safety Gate').first().json.reason_code, $('FN Safety Gate').first().json.correlation_id, $('FN Safety Gate').first().json.actor_role, $('FN Normalize Inbound').first().json.channel, $('FN Safety Gate').first().json.in_quiet_hours, $('FN Safety Gate').first().json.inbound_24h, $('FN Safety Gate').first().json.local_time ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        208,
+        80
+      ],
+      "id": "7afaf923-457a-46c9-97c9-e496c6f3b36d",
+      "name": "PG Write Audit Log",
+      "credentials": {
+        "postgres": {
+          "id": "BTi99ypRxjPBbjJy",
+          "name": "Postgres account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "n0Z3RNLkcRhgds8j",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/n0Z3RNLkcRhgds8j",
+          "cachedResultName": "SF WF-02 AI Conversation"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "correlation_id": "={{ $('FN Safety Gate').first().json.correlation_id }}",
+            "tenant_id": "={{ $('FN Safety Gate').first().json.tenant_id }}",
+            "contact_id": "={{ $('FN Safety Gate').first().json.contact_id }}",
+            "staff_user_id": "={{ $('PG Resolve Contact And Role').first().json.staff_user_id ?? '' }}",
+            "actor_role": "={{ $('FN Safety Gate').first().json.actor_role }}",
+            "channel": "={{ $('FN Normalize Inbound').first().json.channel }}",
+            "message": "={{ $('FN Normalize Inbound').first().json.message }}",
+            "inbound_conversation_id": "={{ $('PG Insert Inbound Message').first().json.id ?? '' }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "correlation_id",
+              "displayName": "correlation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "tenant_id",
+              "displayName": "tenant_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "contact_id",
+              "displayName": "contact_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "staff_user_id",
+              "displayName": "staff_user_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "actor_role",
+              "displayName": "actor_role",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "channel",
+              "displayName": "channel",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "message",
+              "displayName": "message",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            },
+            {
+              "id": "inbound_conversation_id",
+              "displayName": "inbound_conversation_id",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string"
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        48,
+        224
+      ],
+      "id": "7e75164c-74c5-406b-8ba7-f09f7972f872",
+      "name": "SUB Call WF-02 AI"
     }
   ],
   "pinData": {},
   "connections": {
-    "WH-Inbound_Test": {
-      "main": [
-        [
-          {
-            "node": "FN Normalize Inbound",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "FN Normalize Inbound": {
       "main": [
         [
@@ -123,7 +397,7 @@
       "main": [
         [
           {
-            "node": "Respond Ack",
+            "node": "PG Load Gate Context",
             "type": "main",
             "index": 0
           }
@@ -140,6 +414,104 @@
           }
         ]
       ]
+    },
+    "WH-Inbound-Test": {
+      "main": [
+        [
+          {
+            "node": "FN Normalize Inbound",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG Load Gate Context": {
+      "main": [
+        [
+          {
+            "node": "FN Safety Gate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Safety Gate": {
+      "main": [
+        [
+          {
+            "node": "SW Gate Decision",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SW Gate Decision": {
+      "main": [
+        [
+          {
+            "node": "PG Apply Opt Out",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PG Apply Opt Out",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "PG Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "SUB Call WF-02 AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG Write Audit Log": {
+      "main": [
+        [
+          {
+            "node": "RESP Ack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PG Apply Opt Out": {
+      "main": [
+        [
+          {
+            "node": "PG Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SUB Call WF-02 AI": {
+      "main": [
+        [
+          {
+            "node": "PG Write Audit Log",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": false,
@@ -147,7 +519,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "4b3bffd9-0959-4793-93ba-5ca666309b19",
+  "versionId": "cebdc6a7-9291-4b86-ac66-e069eb1a68cd",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "c2b01c85c95930b9e6ce58c18632c72ea8ea6a890722a1d5aa91cc474976a858"
