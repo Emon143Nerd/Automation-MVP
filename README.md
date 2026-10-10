@@ -5,7 +5,7 @@ A patient messages the clinic's Facebook Page; the system understands them, chec
 real availability, books the appointment, and tells the owner — with every decision
 that matters made by deterministic code, not by the model.
 
-**Status:** MVP build in progress. Currently at **Milestone C**.
+**Status:** MVP build in progress. Currently at **Milestone D**.
 
 ---
 
@@ -29,11 +29,11 @@ one until the current one passes.
 |---|---|---|
 | A — DB + n8n + WF-01 | [05-MILESTONE-A.md](docs/05-MILESTONE-A.md) | ✅ done |
 | B — Safety gate + audit | [06-MILESTONE-B.md](docs/06-MILESTONE-B.md) | ✅ done |
-| C — AI intent (Gemini) | [07-MILESTONE-C.md](docs/07-MILESTONE-C.md) | 👈 **current** |
-| D — Action router | 08-MILESTONE-D.md | not written yet |
-| E — Calendar + availability | 09-MILESTONE-E.md | not written yet |
-| F — Booking end-to-end | 10-MILESTONE-F.md | not written yet |
-| G — Real Messenger channel | 11-MILESTONE-G.md | not written yet |
+| C — AI intent (Gemini) | [07-MILESTONE-C.md](docs/07-MILESTONE-C.md) | ✅ done |
+| D — Action router | [08-MILESTONE-D.md](docs/08-MILESTONE-D.md) | 👈 **current** |
+| E — Calendar + availability | [09-MILESTONE-E.md](docs/09-MILESTONE-E.md) | next |
+| F — Booking end-to-end | [10-MILESTONE-F.md](docs/10-MILESTONE-F.md) | written |
+| G — Real Messenger channel | [11-MILESTONE-G.md](docs/11-MILESTONE-G.md) | written |
 | H — Reminders | 12-MILESTONE-H.md | not written yet |
 | I — Voice (ElevenLabs) | after MVP | — |
 | J — Dashboard | after MVP | — |
@@ -44,6 +44,7 @@ one until the current one passes.
 
 ```
 db/         numbered SQL migrations, run in order
+tests/      PowerShell test scripts + shared helpers (sf-helpers.ps1)
 docs/       the plan
 infra/      docker-compose + .env.example
 workflows/exports/   n8n workflow JSON, committed after each milestone

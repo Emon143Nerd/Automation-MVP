@@ -25,6 +25,8 @@ breaks at 11 PM before a client demo, names are the only thing that saves you.
 |---|---|---|
 | `WH` | Webhook | `WH Inbound Messenger` |
 | `TRG` | When Executed by Another Workflow (sub-workflow start) | `TRG Called By Workflow` |
+| `CRY` | Crypto (hash / HMAC) | `CRY Sign Raw Body` |
+| `LOOP` | Loop Over Items | `LOOP Each Message` |
 | `RESP` | Respond to Webhook | `RESP 200 EchoChallenge` |
 | `SET` | Edit Fields / Set | `SET Normalized Message` |
 | `FN` | Code | `FN Normalize Messenger Payload` |
@@ -58,6 +60,7 @@ Rules:
 |---|---|
 | Messenger inbound | `/webhook/salesfixr/v1/inbound/messenger` |
 | Test inbound (dev) | `/webhook/salesfixr/v1/inbound/test` |
+| Internal normalized inbound (adapters → WF-01) | `/webhook/salesfixr/v1/inbound/normalized` |
 | WhatsApp (later) | `/webhook/salesfixr/v1/inbound/whatsapp` |
 | Voice (later) | `/webhook/salesfixr/v1/inbound/voice` |
 | AI tool endpoints | `/webhook/salesfixr/v1/tool/<tool_name>` |
@@ -146,6 +149,14 @@ service_unknown      past_date            hold_expired
 llm_invalid_json     llm_timeout          llm_error
 tool_not_allowed
 escalated_medical    escalated_requested  ok
+
+# added in Milestones D and E
+needs_clarification  unrouted_intent      unauthorized
+bad_request          too_far_ahead        clinic_closed
+no_slots             calendar_unavailable unknown_tenant
+
+# added in Milestones F and G
+bad_signature        send_failed          channel_unsupported
 ```
 
 ---

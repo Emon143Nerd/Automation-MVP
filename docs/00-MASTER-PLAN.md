@@ -217,11 +217,12 @@ Eight workflows, never one giant one. Import/export them as JSON into
 | WF-03 | `SF WF-03 Booking Operations` | Execute Workflow | Availability, hold, book, reschedule, cancel |
 | WF-04 | `SF WF-04 Reminders` | Schedule (every 15 min) | Drain due reminders through the safety gate |
 | WF-05 | `SF WF-05 Voice Handler` | Webhook | ElevenLabs inbound — *Milestone I* |
-| WF-06 | `SF WF-06 Human Escalation` | Execute Workflow | Flag thread, notify staff, pause the AI |
+| WF-06 | `SF WF-06 Human Escalation` | Execute Workflow | Flag thread, notify staff, pause the AI. *Built as `SF TOOL escalate_to_human` in F* |
 | WF-07 | `SF WF-07 Daily Report` | Schedule (daily 08:00) | Owner summary to Telegram |
 | WF-08 | `SF WF-08 Error Logger` | Error Trigger | Catch failures from every other workflow |
 | WF-09 | `SF WF-09 Outbound Router` | Execute Workflow | One place that knows how to send on each channel |
 | WF-10 | `SF WF-10 LLM Gateway` | Execute Workflow | **The only node that talks to a model.** Swap Gemini→OpenAI/Ollama here |
+| WF-11 | `SF WF-11 Messenger Channel` | Webhook | Messenger adapter: verify signature, dedupe, call WF-01, send via WF-09 *(added in G)* |
 | WF-T* | `SF TOOL <name>` | Webhook | One per AI tool — see `docs/04-TOOL-API.md` |
 
 Two of these are what make the "replaceable providers" principle real:
