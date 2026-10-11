@@ -35,8 +35,8 @@
       "type": "n8n-nodes-base.executeWorkflowTrigger",
       "typeVersion": 1.2,
       "position": [
-        -480,
-        -160
+        -1104,
+        -288
       ],
       "id": "f3bcd12a-1bd0-467d-a875-1f28f18196ef",
       "name": "TRG Called By Workflow"
@@ -52,8 +52,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        -336,
-        96
+        -1056,
+        -16
       ],
       "id": "cbdf6e55-6009-47de-b42e-059f321a7a90",
       "name": "PG Load AI Context",
@@ -71,8 +71,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -192,
-        -144
+        -1056,
+        272
       ],
       "id": "bef390af-1ce5-409e-8220-c9faa65fc776",
       "name": "FN Build Prompt"
@@ -101,8 +101,8 @@
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.4,
       "position": [
-        -48,
-        96
+        -816,
+        272
       ],
       "id": "32156f0e-9482-4f45-8bed-2f129b7d3ab3",
       "name": "SUB Call WF-10 LLM",
@@ -115,8 +115,8 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        96,
-        -176
+        -800,
+        -16
       ],
       "id": "b56b0fe6-ee28-4c26-b3bb-b9433a16148e",
       "name": "FN Validate AI Output"
@@ -132,8 +132,8 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
-        256,
-        128
+        480,
+        0
       ],
       "id": "a3908bbe-0632-4f15-9248-85e450c59287",
       "name": "PG Save AI Result",
@@ -146,16 +146,250 @@
     },
     {
       "parameters": {
-        "jsCode": "const { ai_payload, audit_details, ...result } = $('FN Validate AI Output').first().json;\nreturn [{ json: result }];"
+        "jsCode": "const { ai_payload, audit_details, contact_phone_public, ...result } = $('FN Finalize Reply').first().json;\nreturn [{ json: result }];"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        368,
-        -176
+        752,
+        0
       ],
       "id": "8982548f-dec9-4057-bc5b-544d686cf738",
       "name": "FN Return AI Result"
+    },
+    {
+      "parameters": {
+        "jsCode": "const v   = $input.first().json;                          // FN Validate AI Output\nconst ctx = $('PG Load AI Context').first().json;\n\nconst DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];\nconst tenantView = ctx.data_scope === 'tenant';           // owner / staff\nconst flags = new Set(v.validation_flags || []);\nconst phone = ctx.phone_public || 'the office';\n\n// ---- helpers -------------------------------------------------------------\nconst to12h = (hhmm) => {\n  let [h, m] = String(hhmm).split(':').map(Number);\n  const ap = h >= 12 ? 'PM' : 'AM';\n  h = h % 12 || 12;\n  return `${h}:${String(m).padStart(2, '0')} ${ap}`;\n};\nconst dayLabel = (iso) => {\n  const d = (ctx.next_days || []).find((x) => x.date === iso);\n  return d ? d.label : iso;                               // \"Wednesday 08 Oct\" or the raw date\n};\nconst weekdayOf = (iso) => new Date(`${iso}T00:00:00Z`).getUTCDay();\nconst hoursText = () => (ctx.hours || [])\n  .filter((h) => !h.closed)\n  .map((h) => `${DAYS[h.weekday].slice(0, 3)} ${to12h(h.opens)}–${to12h(h.closes)}`)\n  .join(', ');\nconst serviceList = () => (ctx.services || []).map((s) => s.name).join(', ');\n\n// ---- clarifying question for an incomplete / impossible booking ----------\n// Checked in priority order; the first match wins. One question at a time.\nfunction clarify() {\n  if (flags.has('past_date'))\n    return ['past_date', 'That date has already passed. Which upcoming day would suit you?'];\n  if (flags.has('date_invalid'))\n    return ['needs_clarification', \"Sorry, I couldn't work out the date. Which day would you like?\"];\n  if (flags.has('too_far_ahead'))\n    return ['too_far_ahead', `We can book up to ${ctx.max_days_in_advance} days ahead. Could you pick an earlier date?`];\n  if (flags.has('clinic_closed')) {\n    const day = v.date ? DAYS[weekdayOf(v.date)] + 's' : 'that day';\n    return ['clinic_closed', `We're closed on ${day}. Our hours are ${hoursText()}. Which day works instead?`];\n  }\n  if (flags.has('slot_outside_hours')) {\n    const h = (ctx.hours || []).find((x) => Number(x.weekday) === weekdayOf(v.date));\n    return ['slot_outside_hours',\n      `${to12h(v.preferred_time)} is outside our hours on ${DAYS[weekdayOf(v.date)]} ` +\n      `(${to12h(h.opens)}–${to12h(h.closes)}). What time would suit you?`];\n  }\n  if (flags.has('lead_time_too_short'))\n    return ['lead_time_too_short', \"That's a little too soon for us to prepare. Could you choose a later time?\"];\n  if (flags.has('missing_service'))\n    return ['needs_clarification', `Which service would you like? We offer: ${serviceList()}.`];\n  if (flags.has('missing_date'))\n    return ['needs_clarification', 'Which day would you like to come in?'];\n  if (flags.has('missing_time'))\n    return ['needs_clarification', `What time would suit you on ${dayLabel(v.date)}?`];\n  return null;\n}\n\n// ---- the routing table (docs/08-MILESTONE-D.md §D1) -----------------------\nlet route = 'unrouted';\nlet reply = v.reply_text;            // from C: AI draft or a fixed template\nlet source = v.reply_source;\nlet reason = v.reason_code;\n\nconst REPLY_INTENTS = ['faq', 'pricing', 'hours', 'insurance', 'opt_out', 'unknown'];\n\nif (!v.ai_ok) {\n  route = 'reply';                                     // C already chose the fallback\n} else if (v.intent === 'medical_question') {\n  route = 'escalate';                                  // keeps C's medical template\n} else if (v.intent === 'human' || v.needs_human === true) {\n  route = 'escalate';\n  reply = null; source = null;                         // the escalate branch writes it\n} else if (v.intent === 'booking' && !tenantView) {\n  const q = clarify();\n  if (q) {\n    route = 'reply';\n    [reason, reply] = q;\n    source = 'template';\n  } else {\n    route = 'check_availability';\n    reply = null; source = null;\n  }\n} else if (v.intent === 'booking' || v.intent === 'reschedule' || v.intent === 'cancel') {\n  route = 'change_booking';\n  reply = null; source = null;\n} else if (['owner_schedule', 'owner_report', 'owner_contact_lookup'].includes(v.intent)) {\n  route = 'owner_query';\n  reply = null; source = null;\n} else if (REPLY_INTENTS.includes(v.intent)) {\n  route = 'reply';\n}\n// Anything not matched above stays 'unrouted' and is caught by the Switch fallback.\n\nreturn [{\n  json: {\n    ...v,\n    route,\n    reason_code: reason,\n    reply_text: reply,\n    reply_source: source,\n    contact_phone_public: phone,       // convenience for the branch nodes\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -816,
+        -256
+      ],
+      "id": "5a351686-c3c2-4693-b84e-374a7b3fadd5",
+      "name": "FN Plan Action"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "reply",
+                    "rightValue": "reply",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    },
+                    "id": "8fec26a8-7bc3-43f5-842e-79f501cca6cc"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reply"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "6318e994-46e8-4eb9-8b42-acea195423e5",
+                    "leftValue": "check_availability",
+                    "rightValue": "check_availability",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "check_availability"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "a1e7f8d3-2607-417f-b449-9a6ecfda02e9",
+                    "leftValue": "change_booking",
+                    "rightValue": "change_booking",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "change_booking"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "c19d08dc-f8bb-4859-920f-faa2e6e45785",
+                    "leftValue": "owner_query",
+                    "rightValue": "owner_query",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "owner_query"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "63989ee7-aaef-4233-b4eb-a273bb3d6ead",
+                    "leftValue": "escalate",
+                    "rightValue": "escalate",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals",
+                      "name": "filter.operator.equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "escalate"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -544,
+        -112
+      ],
+      "id": "58ca68c4-55a7-434a-8aac-2fd5dbf14b75",
+      "name": "SW Route By Action"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nreturn [{ json: {\n  ...p,\n  action_status: 'not_built',\n  reply_text: p.reply_text ?? `I can't check live availability just yet. Please call us on ${p.contact_phone_public} and we'll find you a time.`,\n  reply_source: p.reply_source ?? 'template',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -320
+      ],
+      "id": "b68f2ccb-4a22-4df2-9bbf-c767a44ad36c",
+      "name": "FN Stub Check Availability"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nconst staff = p.persona_role !== 'customer';\nreturn [{ json: {\n  ...p,\n  action_status: 'not_built',\n  reply_text: p.reply_text ?? (staff\n    ? 'Booking changes from chat are not connected yet (Milestone F).'\n    : `I can't change bookings over chat just yet. Please call us on ${p.contact_phone_public} and we'll sort it out.`),\n  reply_source: p.reply_source ?? 'template',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        -144
+      ],
+      "id": "832ecb5d-3191-4d1b-b5ff-3e895a59d9d1",
+      "name": "FN Stub Change Booking"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nreturn [{ json: {\n  ...p,\n  action_status: 'not_built',\n  reply_text: p.reply_text ?? `Understood (${p.intent.replace('owner_', '').replace('_', ' ')}). Schedule and report lookups are not connected yet (Milestone F).`,\n  reply_source: p.reply_source ?? 'template',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        32
+      ],
+      "id": "3ddb21a8-c449-4421-afe3-31d5b4441702",
+      "name": "FN Stub Owner Query"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nreturn [{ json: {\n  ...p,\n  action_status: 'not_built',\n  reply_text: p.reply_text ?? `I'll need a member of our team for this. Please call us on ${p.contact_phone_public}.`,\n  reply_source: p.reply_source ?? 'template',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        192
+      ],
+      "id": "9f0233f9-ed8f-487f-b485-8ff5a6f81401",
+      "name": "FN Stub Escalate"
+    },
+    {
+      "parameters": {
+        "jsCode": "const p = $input.first().json;\nreturn [{ json: {\n  ...p,\n  action_status: 'unrouted',\n  reason_code: 'unrouted_intent',\n  reply_text: `Sorry, I didn't quite get that. Could you say it another way? You can also call us on ${p.contact_phone_public}.`,\n  reply_source: 'template',\n} }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -192,
+        368
+      ],
+      "id": "72619a9d-2af0-468e-bc1a-105e91c63355",
+      "name": "FN Unrouted"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst ctx = $('PG Load AI Context').first().json;\n\n// Final safety net: there must always be something to say.\nconst reply = String(r.reply_text ?? '').trim()\n  || `Sorry, I didn't quite get that. Could you say it another way? You can also call us on ${r.contact_phone_public}.`;\n\nconst ACTIONS_THAT_CONFIRM = ['check_availability', 'change_booking', 'owner_query'];\n\nreturn [{\n  json: {\n    ...r,\n    reply_text: reply,\n    reply_source: r.reply_source || 'template',\n    action_status: r.action_status || 'none',      // 'none' for the plain reply branch\n    // Final when nothing is still pending. Stubs are final too: they say honestly\n    // that the action isn't available, and promise nothing.\n    reply_is_final: !(ACTIONS_THAT_CONFIRM.includes(r.route) && r.action_status === 'pending'),\n    // offered_slots: filled by the availability branch from Milestone E on, so\n    // Milestone F knows which times the patient was offered.\n    ai_payload: { ...r.ai_payload, route: r.route, action_status: r.action_status || 'none', offered_slots: r.offered_slots ?? null },\n    audit_details: {\n      ...r.audit_details,\n      route: r.route,\n      action_status: r.action_status || 'none',\n      final_reason: r.reason_code,\n      reply_source: r.reply_source || 'template',\n    },\n  },\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ],
+      "id": "00edc505-da29-4721-9404-3bd262b31f6a",
+      "name": "FN Finalize Reply"
     }
   ],
   "pinData": {},
@@ -208,7 +442,7 @@
       "main": [
         [
           {
-            "node": "PG Save AI Result",
+            "node": "FN Plan Action",
             "type": "main",
             "index": 0
           }
@@ -225,14 +459,137 @@
           }
         ]
       ]
+    },
+    "FN Plan Action": {
+      "main": [
+        [
+          {
+            "node": "SW Route By Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SW Route By Action": {
+      "main": [
+        [
+          {
+            "node": "FN Finalize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FN Stub Check Availability",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FN Stub Change Booking",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FN Stub Owner Query",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FN Stub Escalate",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "FN Unrouted",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Unrouted": {
+      "main": [
+        [
+          {
+            "node": "FN Finalize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Stub Escalate": {
+      "main": [
+        [
+          {
+            "node": "FN Finalize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Stub Owner Query": {
+      "main": [
+        [
+          {
+            "node": "FN Finalize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Stub Change Booking": {
+      "main": [
+        [
+          {
+            "node": "FN Finalize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Stub Check Availability": {
+      "main": [
+        [
+          {
+            "node": "FN Finalize Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "FN Finalize Reply": {
+      "main": [
+        [
+          {
+            "node": "PG Save AI Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
-  "active": false,
+  "active": true,
   "settings": {
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "4e67e8be-8db1-4adb-84d6-351b6c183af3",
+  "versionId": "9e2d2ab8-c820-4c92-bf2a-fd423529f12f",
   "meta": {
     "templateCredsSetupCompleted": true,
     "instanceId": "c2b01c85c95930b9e6ce58c18632c72ea8ea6a890722a1d5aa91cc474976a858"
