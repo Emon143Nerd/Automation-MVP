@@ -256,6 +256,27 @@ Connect: `FN Plan Action` → `SW Route By Action`.
 | 4 | `escalate` | `escalate` |
 | 5 *(fallback)* | — | `unrouted` |
 
+**Every rule has the same left value.** In each of the 5 rules:
+
+| Box | What to enter |
+|---|---|
+| left value | Expression: `{{ $json.route }}` (the **same** expression in all 5 rules) |
+| operator | **String → is equal to** |
+| right value | the route name for that output (`reply`, `check_availability` …) |
+
+**The left box must be in Expression mode.** Hover over the box and click
+**Expression** (or start typing `{{`). When it's right, the box turns into a code
+field and shows a green preview of the value, e.g. `check_availability`. If you
+paste `{{ $json.route }}` into a box still in *Fixed* mode, n8n compares the
+literal text "{{ $json.route }}" with "reply". That's never equal, so every message
+falls through to the `unrouted` fallback.
+
+Don't type the route name into the left box either. A rule like `reply` equals `reply`
+compares two fixed words, so it's **always true**, and every message leaves through
+output 0 (`reply`) whatever its route. The symptom: `route` in your test output
+says `check_availability` (or `escalate` …) but `action_status` is `none` and the
+reply is the generic fallback.
+
 To rename an output: in each rule, toggle **Rename Output** on and type the name.
 The names appear on the canvas next to each connector, so you never have to count
 outputs to know which line is which.

@@ -74,8 +74,21 @@ Follow doc 01 §5 exactly. Extra notes:
 - **Redirect URI.** In n8n, start creating the credential first (E1.3). The dialog
   shows an *OAuth Redirect URL*. Copy that exact value into Google Cloud. With your
   `.env` it will be `http://localhost:5678/rest/oauth2-credential/callback`.
-- **Add yourself as a Test user** on the consent screen. Skipping this gives
-  `Error 403: access_denied` when you click *Connect* in n8n.
+- **Add yourself as a Test user. This is the step people miss.** While the app is
+  in *Testing*, Google lets **only** the accounts on the Test users list sign in.
+  Everyone else gets *"Access blocked: … has not completed the Google
+  verification process … Error 403: access_denied"*. Creating the project with
+  your account does **not** make you a test user.
+  - Google Cloud Console → **Google Auth Platform → Audience** (older consoles:
+    *APIs & Services → OAuth consent screen*) → **Test users → + Add users**.
+  - Enter the **exact** Gmail address you'll pick in the Google sign-in window
+    (the one that owns the SmileCare calendar) → **Save**.
+  - Back in n8n, click **Sign in with Google** again. It can take a minute or
+    two after saving to take effect. If you have several Google accounts in the
+    browser, make sure you choose the one you added.
+  - You'll still see a *"Google hasn't verified this app"* screen. That's normal
+    for Testing apps: click **Continue**. It's a different screen from the 403
+    error, and only the 403 means something is wrong.
 - **The 7-day catch.** While the consent screen's *Publishing status* is
   **Testing**, Google expires the connection's refresh token after **7 days**. Then
   every availability check fails with `calendar_unavailable` until you reconnect.
@@ -97,8 +110,9 @@ n8n → **Credentials → Create credential →** search **Google Calendar OAuth
 | Client ID | from Google Cloud |
 | Client Secret | from Google Cloud |
 
-Click **Sign in with Google** → choose your account → allow. It must show
-**Connected** (green).
+Click **Sign in with Google** → choose **the account you added as a Test user in
+E1.2** → allow. It must show **Connected** (green). *Access blocked … Error 403:
+access_denied* means that account isn't on the Test users list. Fix it in E1.2.
 
 ### E1.4 Put the calendar id and tool token where n8n can read them
 
@@ -144,6 +158,27 @@ Two settings matter more than they look:
 - **Recurring events:** a weekly "Staff meeting, Tuesdays 1 PM" is one event with
   a repeat rule. Unless the node is told to expand repeats into individual
   occurrences, a repeating event created last month doesn't appear in today's window.
+
+### `$env` in node fields shows a red "not accessible via UI" — that's normal
+
+When you type `{{ $env.SF_GOOGLE_CALENDAR_ID }}` into a node field, the preview
+under it says **`[ERROR: not accessible via UI, please run node]`** in red. **This
+is not an error in your workflow.** For security, n8n never shows environment
+variables in the editor's live preview. They are filled in only when the node
+actually runs.
+
+- Keep the field in **Expression** mode (a *Fixed* field would send the literal
+  text `{{ $env… }}` to Google).
+- For the Calendar field, first switch its selector from *From list* to **By ID**,
+  then switch it to Expression.
+- To check the value is right, **run the node**: the output shows the events (or
+  Google's error if the id is wrong). If `$env.SF_GOOGLE_CALENDAR_ID` is empty at
+  run time, the id isn't in `infra/.env`, or you didn't run `docker compose up -d`
+  after adding it.
+
+The same red preview appears everywhere `$env` is used in a node field. That
+includes the Messenger URL in Milestone G (`$env.SF_META_GRAPH_VERSION`). Code
+nodes don't show it.
 
 ### "Always Output Data" — node Settings tab
 
@@ -247,12 +282,25 @@ return [{
 
 ### Node 3 — `IF Request Accepted`  (If)
 
-| Setting | Value |
-|---|---|
-| Condition | `{{ $json.gate }}` **String → is equal to** `ok` |
+**Connect:** `FN Validate Tool Request` → this node.
 
-- **true** → node 5
-- **false** → node 4
+The IF node has **exactly one condition**:
+
+| Field | What to enter |
+|---|---|
+| value 1 (left box) | Expression: `{{ $json.gate }}` |
+| operator (middle) | **String → is equal to** |
+| value 2 (right box) | `ok` (just those two letters, Fixed mode) |
+
+Then wire its two outputs:
+
+- the **true** output → node 5 (`PG Load Availability Context`)
+- the **false** output → node 4 (`RESP Tool Rejected`)
+
+"true → node 5 / false → node 4" describes the **connections** you draw on the
+canvas. It is **not** something to type into the condition boxes. If you see
+`"reason_code": "ok"` together with `HTTP 400` in your tests, the condition is
+wrong and every valid request is going to the rejected branch.
 
 ---
 
@@ -270,6 +318,8 @@ response shape, so the caller never has to guess.
 ---
 
 ### Node 5 — `PG Load Availability Context`  (Postgres, Execute Query)
+
+**Connect:** `IF Request Accepted` **true** output → this node.
 
 Credential: `Postgres account`. **Settings → Always Output Data: ON.**
 
@@ -370,12 +420,14 @@ Things worth understanding:
 
 ### Node 6 — `GC Get Events For Day`  (Google Calendar)
 
+**Connect:** `PG Load Availability Context` → this node.
+
 | Setting | Value |
 |---|---|
 | Credential | `SalesFixr Google Calendar` |
 | Resource | **Event** |
 | Operation | **Get Many** |
-| Calendar | switch the selector to **By ID**, Expression: `{{ $env.SF_GOOGLE_CALENDAR_ID }}` |
+| Calendar | switch the selector to **By ID**, then Expression: `{{ $env.SF_GOOGLE_CALENDAR_ID }}`. The red *"not accessible via UI"* preview is expected; see E2 |
 | Return All | **on** |
 | After | Expression: `{{ $('PG Load Availability Context').first().json.day_start_utc }}` |
 | Before | Expression: `{{ $('PG Load Availability Context').first().json.day_end_utc }}` |
@@ -394,6 +446,8 @@ values either way.)
 ---
 
 ### Node 7 — `FN Compute Slots`  (Code)
+
+**Connect:** `GC Get Events For Day` → this node.
 
 ```javascript
 // FN Compute Slots
@@ -540,6 +594,8 @@ order, because "1:00, 1:30 or 2:30" reads naturally and "1:30, 2:30, 1:00" doesn
 
 ### Node 8 — `PG Write Tool Audit`  (Postgres, Execute Query)
 
+**Connect:** `FN Compute Slots` → this node.
+
 Contract rule 5: every tool call leaves a row, tied to the conversation by
 `correlation_id`.
 
@@ -560,6 +616,8 @@ RETURNING id;
 ---
 
 ### Node 9 — `RESP Tool Result`  (Respond to Webhook)
+
+**Connect:** `PG Write Tool Audit` → this node. This is the last node.
 
 | Setting | Value |
 |---|---|
@@ -655,8 +713,8 @@ SELECT id FROM contacts WHERE phone_e164 = '+12125550199';
 ```
 
 ```powershell
-$pid_ = "PASTE-CONTACT-ID"
-$day  = "PASTE-TEST-DAY"          # e.g. 2026-10-12
+$pid_ = "26aaf5e1-6440-40e4-809a-842f0f01ad2c"
+$day  = "2026-10-12"          # e.g. 2026-10-12
 ```
 
 ### E4.4 The tool tests
