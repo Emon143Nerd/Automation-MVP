@@ -95,10 +95,44 @@ Follow doc 01 §5 exactly. Extra notes:
   Two options:
   - Keep **Testing** and click *Reconnect* on the n8n credential once a week. Fine
     for building.
-  - Click **Publish app** (consent screen → *Publishing status* → *In production*).
-    For your own account you don't need Google's verification. You'll see an
-    "unverified app" warning once when connecting (click *Advanced → Go to
-    SalesFixr*). The token then stops expiring. **Do this before any client demo.**
+  - **Publish the app** so the token stops expiring. **Do this before any client
+    demo.** Steps below (*Stopping the 7-day logout*).
+
+#### Stopping the 7-day logout (publish to Production)
+
+Google won't publish until the **Branding** page is complete. Console menu:
+**Google Auth Platform** (older consoles: *APIs & Services → OAuth consent screen*).
+
+1. **Have a privacy policy page online first.** Google needs a public URL. Add a
+   simple page to your Vercel site, e.g. `https://brandfixr.com/privacy` (who you are,
+   what data the booking assistant stores — name, phone, messages, appointments — why,
+   how long, and a contact email). It must open without login.
+2. **Google Auth Platform → Branding**:
+
+| Field | Value |
+|---|---|
+| App name | `SalesFixr` |
+| User support email | your email |
+| Application home page | `https://brandfixr.com` (**with `https://`**; without it you get *"Invalid domain: must use either http or https as the scheme"*) |
+| Application privacy policy link | `https://brandfixr.com/privacy` |
+| Application terms of service link | leave empty |
+| Authorized domains | **+ Add domain** → `brandfixr.com` |
+| Developer contact information | your email |
+
+   → **Save**.
+3. **Google Auth Platform → Audience** → **Publish app** → **Confirm**. Publishing
+   status becomes **In production**.
+4. **n8n → Credentials → `SalesFixr Google Calendar` → Reconnect** (sign in again
+   once). Google shows *"Google hasn't verified this app"* → **Advanced** → **Go to
+   SalesFixr (unsafe)** → allow. That's expected: you're the only user, and you don't
+   need Google's verification for that.
+
+**Check:** Audience shows *In production*; the credential connects; a week later
+availability checks still work.
+
+*Not ready to publish yet?* Stay in Testing and reconnect the credential when the bot
+starts answering *"I can't check our calendar right now"*. The bot handles the
+expired login safely (it never invents a time).
 
 ### E1.3 The n8n credential
 
@@ -622,7 +656,7 @@ RETURNING id;
 | Setting | Value |
 |---|---|
 | Respond With | **JSON** |
-| Response Body | `{{ JSON.stringify($('FN Compute Slots').first().json.response) }}` |
+| Response Body | **Expression** mode (green preview under it): `{{ JSON.stringify($('FN Compute Slots').first().json.response) }}` |
 
 Response code stays the default 200, including for `ok: false` answers (contract
 rule 6: return `ok:false` rather than throwing).

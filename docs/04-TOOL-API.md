@@ -11,7 +11,7 @@ Base URL: `{SF_PUBLIC_BASE_URL}/webhook/salesfixr/v1/tool/<tool_name>`
 
 ## Conventions
 
-**Every request** carries this envelope. The caller (WF-02 for chat, ElevenLabs for
+**Every request** carries this envelope. The caller (WF-02 for chat, WF-05 for
 voice) fills it from the **authenticated identity**, never from model output:
 
 ```json
@@ -100,7 +100,8 @@ Order of operations — **this order matters**:
 4. Insert `reminders` rows from `clinic_settings.reminder_offsets_hours`.
 5. Audit log.
 
-If step 2 fails, the row stays `held` and expires on its own — no orphan bookings.
+If step 2 fails, the row stays `held` until `hold_expires_at`; WF-04's housekeeping (Milestone H) then
+marks it `cancelled / hold_expired` so the slot is free again — no orphan bookings.
 
 ```json
 { "ok": true, "data": {
@@ -161,7 +162,7 @@ needs them:
 | F+ | `list_my_appointments`, `cancel_appointment`, `reschedule_appointment` |
 | F+ | `get_schedule`, `get_daily_report`, `lookup_contact` — *this is where role-awareness becomes visible in the demo* |
 | H | (reminders use the DB directly, no tool needed) |
-| I | none new — ElevenLabs reuses everything above |
+| I | none new — ElevenLabs reaches them through the WF-05 adapter (identity by phone, token added by n8n) |
 
 ---
 

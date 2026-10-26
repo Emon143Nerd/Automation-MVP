@@ -99,30 +99,11 @@ $r.candidates[0].content.parts[0].text
 
 ## 4. ngrok — the public URL  *(Milestone G)*
 
-**What it is:** gives your `localhost:5678` a real https address on the internet so
-Facebook can reach it.
+**What it is:** gives your `localhost:5678` a fixed public https address so
+Facebook can reach it. Free plan, no card, one free static domain.
 
-1. https://ngrok.com → *Sign up free*. No card. ⚠️ confirm at https://ngrok.com/pricing
-2. Dashboard → **Your Authtoken** → copy it.
-3. Dashboard → **Domains** → create your free **static domain**.
-   You'll get something like `honest-koala-12ab.ngrok-free.app`. This never changes.
-4. Install: https://ngrok.com/download (or `winget install ngrok.ngrok`).
-5. Register the token once:
-   ```
-   ngrok config add-authtoken YOUR_TOKEN_HERE
-   ```
-6. Start the tunnel (leave this window open whenever you're demoing):
-   ```
-   ngrok http --domain=honest-koala-12ab.ngrok-free.app 5678
-   ```
-7. Put the https URL in `infra/.env` as `SF_PUBLIC_BASE_URL=`.
-
-**You'll know it worked when:** opening `https://your-domain.ngrok-free.app` in a
-browser shows the n8n login screen.
-
-> ⚠️ If the free static domain is no longer offered, tell me and we'll switch to a
-> Cloudflare Named Tunnel — that needs a domain you own, the only paid piece in the
-> whole project.
+**Step by step:** `docs/11-MILESTONE-G.md` §G2 (kept in one place so it can't
+drift out of date).
 
 ---
 
@@ -177,52 +158,25 @@ makes "hello" appear in your Telegram.
 
 ---
 
-## 7. Meta for Developers — Facebook Messenger  *(Milestone G)*
+## 7. Meta — Facebook Messenger + Instagram DMs  *(Milestone G)*
 
-This is the fiddliest one. Read it all before starting.
+**You don't create a Meta account or log in for this.** The owner of the Page and
+Instagram account (your friend for the portfolio, the client later) creates a
+**System User** token in their Business Manager and sends you 4 values: App ID, App
+secret, System user token, Page ID. Send them `docs/META-ACCESS-HANDOFF.md`.
 
-**The key fact that makes this free and reviewable-later:** while your Meta app is
-in **Development mode**, it can exchange messages with people who have a **role on
-the app** (admin / developer / tester) and with **admins of the connected Page**.
-That is enough for you, your test account, and a client demo. Messaging the *general
-public* requires App Review for `pages_messaging`, which is a Milestone-after-MVP
-concern. ⚠️ Meta's dashboard layout and product names change often — if a label
-below doesn't match what you see, tell me what you see and I'll re-map it.
+Free while the app stays in **Development mode**: the bot then answers people with a
+role on the app (admins/testers) and Page admins, which is enough for building and
+demos. Answering the general public needs App Review + Business Verification
+(post-MVP; see Milestone G, Appendix B).
 
-**Prerequisites:** a Facebook **Page** (not a personal profile) that you administer.
+**Step by step:** `docs/11-MILESTONE-G.md` §G3 (access, checked by
+`tests\meta-setup.ps1`) and §G8 (webhook, also from PowerShell).
 
-1. https://developers.facebook.com → *Get Started* with your Facebook account.
-2. **My Apps → Create App**.
-   - Use case: choose the one offering **Messenger / messaging** (recently phrased
-     as *"Other" → "Business"*).
-   - App name: `SalesFixr Dev`. Contact email: yours.
-3. In the app dashboard, **add the Messenger product**.
-4. **Messenger → Settings → Access Tokens** (or *Generate token*):
-   - **Connect your Page** → pick your Page → grant the permissions it asks for.
-   - Generate a **Page Access Token**. Copy it → `.env` as `SF_META_PAGE_TOKEN=`.
-   - Also note the **Page ID** → `SF_META_PAGE_ID=`.
-5. **App Settings → Basic**: copy **App ID** and **App Secret** →
-   `SF_META_APP_ID=`, `SF_META_APP_SECRET=`.
-   (The secret is used to verify the `X-Hub-Signature-256` header so nobody can
-   forge messages into your webhook. We do check it.)
-6. **Invent a verify token.** Any random string you make up, e.g.
-   `sf_verify_9c2f81ab`. Put it in `.env` as `SF_META_VERIFY_TOKEN=`. Meta will echo
-   it back at you during webhook setup, and WF-01 must return it unchanged.
-7. **Messenger → Settings → Webhooks → Add Callback URL.** Do this only *after*
-   WF-01 is built and ngrok is running, or verification will fail.
-   - Callback URL: `https://your-domain.ngrok-free.app/webhook/salesfixr/v1/inbound/messenger`
-   - Verify Token: the string from step 6.
-   - Subscribe the Page to these fields: **`messages`**, **`messaging_postbacks`**,
-     and (optional) `message_reactions`.
-
-**You'll know it worked when:** Meta shows the webhook as *Complete/Verified*, and
-sending a message to your Page from your own Facebook account produces an n8n
-execution with a `sender.id` (that's the **PSID**) in the payload.
-
-> **Save your own PSID.** Take the `sender.id` from that first execution and run the
-> commented-out `INSERT INTO staff_users ...` at the bottom of
-> `db/002_seed_demo_clinic.sql` with it. That single row is what makes the AI
-> treat you as the owner. Until you do it, you're just another patient to the system.
+> **2026 change:** Meta retired the `CONFIRMED_EVENT_UPDATE`, `ACCOUNT_UPDATE`
+> and `POST_PURCHASE_UPDATE` message tags. Messages we start ourselves (reminders)
+> are only possible within 24 h of the patient's last message, or later through
+> Meta's approved *utility message* templates. Milestone H is designed around this.
 
 ---
 

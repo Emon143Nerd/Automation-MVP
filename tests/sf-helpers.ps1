@@ -56,11 +56,13 @@ function Invoke-Tool($name, $context, $toolArgs) {
 # Milestone G: send a Messenger webhook event signed exactly like Meta does.
 #   Send-MessengerEvent $psid "m_test_123" "hello"
 #   Send-MessengerEvent $psid "m_test_124" "hello" -BadSignature
-function Send-MessengerEvent($psid, $mid, $text, [switch]$BadSignature) {
+#   Send-MessengerEvent $igsid "m_test_125" "hello" -Instagram     # an Instagram DM event instead
+function Send-MessengerEvent($psid, $mid, $text, [switch]$BadSignature, [switch]$Instagram) {
   $secret = Get-SfEnv "SF_META_APP_SECRET"
-  $page   = Get-SfEnv "SF_META_PAGE_ID"
+  $page   = if ($Instagram) { Get-SfEnv "SF_META_IG_ACCOUNT_ID" } else { Get-SfEnv "SF_META_PAGE_ID" }
+  $kind   = if ($Instagram) { "instagram" } else { "page" }
   $ts = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-  $obj = @{ object = "page"; entry = @(@{ id = $page; time = $ts; messaging = @(@{
+  $obj = @{ object = $kind; entry = @(@{ id = $page; time = $ts; messaging = @(@{
            sender = @{ id = $psid }; recipient = @{ id = $page }; timestamp = $ts;
            message = @{ mid = $mid; text = $text } }) }) }
   $json  = $obj | ConvertTo-Json -Depth 8 -Compress
@@ -71,6 +73,23 @@ function Send-MessengerEvent($psid, $mid, $text, [switch]$BadSignature) {
   $r = Invoke-WebRequest -UseBasicParsing -Method Post -Uri "$SfBase/webhook/salesfixr/v1/inbound/messenger" `
          -ContentType "application/json" -Headers @{ "x-hub-signature-256" = $sig } -Body $bytes
   "HTTP $($r.StatusCode)  mid=$mid  $(if ($BadSignature) { '(forged signature)' } else { '(signed)' })"
+}
+
+# Milestone I: call the voice adapter (WF-05) exactly like ElevenLabs does.
+#   Invoke-VoiceTool @{ tool="check_availability"; stated_phone="+12125550177"; service_code="dental_cleaning"; date="2026-10-20"; preferred_time="10:00" }
+#   Invoke-VoiceTool @{ tool="check_availability" } -NoToken      # expect 403
+function Invoke-VoiceTool([hashtable]$fields, [switch]$NoToken) {
+  if (-not $fields.ContainsKey("tenant_slug"))     { $fields.tenant_slug = "demo_clinic" }
+  if (-not $fields.ContainsKey("conversation_id")) { $fields.conversation_id = "ps-test-" + (Get-Random) }
+  $headers = @{}
+  if (-not $NoToken) { $headers["x-sf-voice-token"] = Get-SfEnv "SF_VOICE_TOKEN" }
+  try {
+    $r = Invoke-RestMethod -Method Post -ContentType "application/json" -Headers $headers -TimeoutSec 60 `
+           -Body ($fields | ConvertTo-Json -Depth 4) -Uri "$SfBase/webhook/salesfixr/v1/voice/tool"
+    "ok={0}  {1}" -f $r.ok, $r.result
+  } catch {
+    "HTTP $($_.Exception.Response.StatusCode.value__): $($_.ErrorDetails.Message)"
+  }
 }
 
 Write-Host "SalesFixr helpers loaded. Internal token: $(if ($internalToken) { 'set' } else { 'not set (fine before Milestone G)' })"

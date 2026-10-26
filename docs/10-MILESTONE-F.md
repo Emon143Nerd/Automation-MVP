@@ -161,6 +161,19 @@ give the new name. Then change the webhook **path** first (two webhooks with the
 same path conflict), and replace the nodes this guide lists. The rest stays as it
 is.
 
+**After duplicating, these values still belong to the old tool. Fix every one:**
+
+| Node | What to change |
+|---|---|
+| Webhook | **Path** → this tool's path, and rename the node |
+| `FN Validate Tool Request` | Replace the **whole** code with this tool's version |
+| `PG Write Tool Audit` | The action name in the SQL (`'TOOL', '<this tool>'`) **and** all six Query Parameters → this tool's result node |
+| `RESP Tool Result` | Response Body → this tool's result node, in **Expression** mode |
+
+Every node that reads another node by name (`$('…')`) must name a node that
+exists **in this workflow**. A leftover `$('FN Compute Slots')` or
+`$('FN Booking Result')` makes the call fail.
+
 ### `ON CONFLICT DO NOTHING` on an exclusion constraint
 
 Normally an `INSERT` that violates the no-overlap constraint throws an error, and
@@ -389,7 +402,7 @@ SELECT (SELECT id FROM ins)                                                     
 |---|---|
 | Credential | `SalesFixr Google Calendar` |
 | Resource / Operation | **Event** / **Create** |
-| Calendar | **By ID**: `{{ $env.SF_GOOGLE_CALENDAR_ID }}` |
+| Calendar | **By ID**, Expression: `{{ $env.SF_GOOGLE_CALENDAR_ID }}`. The red *"[ERROR: not accessible via UI, please run node]"* under it is **expected** (n8n hides `$env` in the editor preview), same as E2. It works when the node runs |
 | Start | `{{ $json.start_utc }}` |
 | End | `{{ $json.end_utc }}` |
 | Additional Fields → Summary | `{{ $('PG Load Booking Context').first().json.service.display_name }} — {{ $('PG Load Booking Context').first().json.contact.name || 'New patient' }}` |
@@ -400,7 +413,7 @@ SELECT (SELECT id FROM ins)                                                     
 ### Node 11 — `IF Event Created`  (If)
 
 `{{ !!$json.id && $json.error === undefined }}` **Boolean → is true**.
-**true** → node 12. **false** → node 13 (calendar failed; the hold expires by itself).
+**true** → node 12. **false** → node 13 (calendar failed; the hold is released by WF-04 housekeeping once it expires, Milestone H).
 
 ---
 
@@ -566,8 +579,41 @@ depending on whether Telegram ran:
 
 ### Node 17 — `RESP Tool Result`  (Respond to Webhook)
 
-Respond With **JSON**, body:
-`{{ JSON.stringify($('FN Booking Result').first().json.response) }}`
+| Setting | Value |
+|---|---|
+| Respond With | **JSON** |
+| Response Body | **Expression** mode: `{{ JSON.stringify($('FN Booking Result').first().json.response) }}` |
+
+Green preview under the field = Expression mode. No preview = Fixed mode, which is wrong.
+
+### Wiring table — `SF TOOL book_appointment`
+
+Draw exactly these connections, and nothing else. "→" means: drag from the **output** dot on the right of the first node to the **input** dot on the left of the second.
+
+| # | From (output) | To (input) |
+|---|---|---|
+| 1 | `WH Tool Book Appointment` | `FN Validate Tool Request` |
+| 2 | `FN Validate Tool Request` | `IF Request Accepted` |
+| 3 | `IF Request Accepted` **true** | `PG Load Booking Context` |
+| 4 | `IF Request Accepted` **false** | `RESP Tool Rejected` (end of that branch) |
+| 5 | `PG Load Booking Context` | `FN Decide Booking` |
+| 6 | `FN Decide Booking` | `IF Place Hold` |
+| 7 | `IF Place Hold` **true** | `PG Place Hold` |
+| 8 | `IF Place Hold` **false** | `FN Booking Result` |
+| 9 | `PG Place Hold` | `IF Hold Placed` |
+| 10 | `IF Hold Placed` **true** | `GC Create Event` |
+| 11 | `IF Hold Placed` **false** | `FN Booking Result` |
+| 12 | `GC Create Event` | `IF Event Created` |
+| 13 | `IF Event Created` **true** | `PG Confirm Booking` |
+| 14 | `IF Event Created` **false** | `FN Booking Result` |
+| 15 | `PG Confirm Booking` | `FN Booking Result` |
+| 16 | `FN Booking Result` | `IF Booked` |
+| 17 | `IF Booked` **true** | `TG Notify Owner` |
+| 18 | `IF Booked` **false** | `PG Write Tool Audit` |
+| 19 | `TG Notify Owner` | `PG Write Tool Audit` |
+| 20 | `PG Write Tool Audit` | `RESP Tool Result` (last node, no outgoing line) |
+
+**Check:** `FN Booking Result` has **4** incoming lines (rows 8, 11, 14, 15) and `PG Write Tool Audit` has **2** (rows 18, 19). Every IF node has **both** its outputs connected.
 
 **Save → Publish.**
 
@@ -731,12 +777,60 @@ return [{
 }];
 ```
 
-### Nodes 9–10 — `PG Write Tool Audit` → `RESP Tool Result`
+### Node 9 — `PG Write Tool Audit`  (Postgres)
 
-As in F3 nodes 16–17, with action `'escalate_to_human'` and every
-`$('FN Booking Result')` replaced by `$('FN Escalation Result')`. (Here `$json`
-would work too, since nothing sits between them, but keeping the same expressions
-across all tools makes them easier to compare.)
+If this node came with the duplicated workflow, **replace both fields**. The copy
+still says the old tool's action name and points to the old tool's result node.
+
+**Query** (note the action name: `'escalate_to_human'`):
+
+```sql
+INSERT INTO audit_logs
+  (tenant_id, contact_id, workflow, action, status, reason_code, correlation_id, details)
+VALUES
+  (NULLIF($1, '')::uuid, NULLIF($2, '')::uuid, 'TOOL', 'escalate_to_human', $3, $4, $5, $6::jsonb)
+RETURNING id;
+```
+
+**Query Parameters** (Expression mode, the whole field replaced; all six read from
+`FN Escalation Result`):
+
+```
+{{ [ $('FN Escalation Result').first().json.audit.tenant_id, $('FN Escalation Result').first().json.audit.contact_id, $('FN Escalation Result').first().json.audit.status, $('FN Escalation Result').first().json.audit.reason_code, $('FN Escalation Result').first().json.audit.correlation_id, JSON.stringify($('FN Escalation Result').first().json.audit.details) ] }}
+```
+
+### Node 10 — `RESP Tool Result`  (Respond to Webhook)
+
+| Setting | Value |
+|---|---|
+| Respond With | **JSON** |
+| Response Body | **Expression** mode: `{{ JSON.stringify($('FN Escalation Result').first().json.response) }}` |
+
+The Response Body must be in **Expression** mode, with a green preview under it.
+In *Fixed* mode n8n sends back the literal text `{{ JSON.stringify(...) }}`.
+
+**Before saving, check that this workflow contains no text from another tool:**
+search the two nodes above for `FN Booking Result`, `FN Compute Slots`,
+`check_availability` or `book_appointment`. None may appear.
+
+### Wiring table — `SF TOOL escalate_to_human`
+
+Draw exactly these connections, and nothing else. "→" means: drag from the **output** dot on the right of the first node to the **input** dot on the left of the second.
+
+| # | From (output) | To (input) |
+|---|---|---|
+| 1 | `WH Tool Escalate To Human` | `FN Validate Tool Request` |
+| 2 | `FN Validate Tool Request` | `IF Request Accepted` |
+| 3 | `IF Request Accepted` **true** | `PG Escalate` |
+| 4 | `IF Request Accepted` **false** | `RESP Tool Rejected` (end of that branch) |
+| 5 | `PG Escalate` | `IF Escalation Allowed` |
+| 6 | `IF Escalation Allowed` **true** | `TG Notify Owner Escalation` |
+| 7 | `IF Escalation Allowed` **false** | `FN Escalation Result` |
+| 8 | `TG Notify Owner Escalation` | `FN Escalation Result` |
+| 9 | `FN Escalation Result` | `PG Write Tool Audit` |
+| 10 | `PG Write Tool Audit` | `RESP Tool Result` (last node) |
+
+**Check:** `FN Escalation Result` has **2** incoming lines (rows 7 and 8).
 
 **Save → Publish.**
 
@@ -828,9 +922,55 @@ return [{ json: {
 } }];
 ```
 
-### Nodes 7–8 — `PG Write Tool Audit` → `RESP Tool Result`
+### Node 7 — `PG Write Tool Audit`  (Postgres)
 
-As in E (action `'get_schedule'`, reading `$json.audit` / `$('FN Schedule Result')`).
+If this node came with the duplicated workflow, **replace both fields**. The copy
+still says the old tool's action name and points to the old tool's result node.
+
+**Query** (note the action name: `'get_schedule'`):
+
+```sql
+INSERT INTO audit_logs
+  (tenant_id, contact_id, workflow, action, status, reason_code, correlation_id, details)
+VALUES
+  (NULLIF($1, '')::uuid, NULLIF($2, '')::uuid, 'TOOL', 'get_schedule', $3, $4, $5, $6::jsonb)
+RETURNING id;
+```
+
+**Query Parameters** (Expression mode, the whole field replaced; all six read from
+`FN Schedule Result`):
+
+```
+{{ [ $('FN Schedule Result').first().json.audit.tenant_id, $('FN Schedule Result').first().json.audit.contact_id, $('FN Schedule Result').first().json.audit.status, $('FN Schedule Result').first().json.audit.reason_code, $('FN Schedule Result').first().json.audit.correlation_id, JSON.stringify($('FN Schedule Result').first().json.audit.details) ] }}
+```
+
+### Node 8 — `RESP Tool Result`  (Respond to Webhook)
+
+| Setting | Value |
+|---|---|
+| Respond With | **JSON** |
+| Response Body | **Expression** mode: `{{ JSON.stringify($('FN Schedule Result').first().json.response) }}` |
+
+The Response Body must be in **Expression** mode, with a green preview under it.
+In *Fixed* mode n8n sends back the literal text `{{ JSON.stringify(...) }}`.
+
+**Before saving, check that this workflow contains no text from another tool:**
+search the two nodes above for `FN Booking Result`, `FN Compute Slots`,
+`check_availability` or `book_appointment`. None may appear.
+
+### Wiring table — `SF TOOL get_schedule`
+
+Draw exactly these connections, and nothing else. "→" means: drag from the **output** dot on the right of the first node to the **input** dot on the left of the second.
+
+| # | From (output) | To (input) |
+|---|---|---|
+| 1 | `WH Tool Get Schedule` | `FN Validate Tool Request` |
+| 2 | `FN Validate Tool Request` | `IF Request Accepted` |
+| 3 | `IF Request Accepted` **true** | `PG Load Schedule` |
+| 4 | `IF Request Accepted` **false** | `RESP Tool Rejected` (end of that branch) |
+| 5 | `PG Load Schedule` | `FN Schedule Result` |
+| 6 | `FN Schedule Result` | `PG Write Tool Audit` |
+| 7 | `PG Write Tool Audit` | `RESP Tool Result` (last node) |
 
 **Save → Publish.**
 
@@ -838,19 +978,23 @@ As in E (action `'get_schedule'`, reading `$json.audit` / `$('FN Schedule Result
 
 ## F6. Test the three tools by hand
 
-Same PowerShell setup as E4.3 (`$toolToken` read from `.env`). Add this
-general-purpose caller:
+**Open a new PowerShell window and load the shared helpers first.** They read the
+tool token from `infra\.env` and define `Invoke-Tool`:
 
 ```powershell
-function Invoke-Tool($name, $context, $toolArgs) {
-  $context.correlation_id = "manual-f-" + (Get-Random)
-  $context.tenant_slug = "demo_clinic"
-  $payload = @{ auth = @{ tool_token = $toolToken }; context = $context; args = $toolArgs } | ConvertTo-Json -Depth 6
-  try {
-    Invoke-RestMethod -Method Post -ContentType "application/json" -Body $payload `
-      -Uri "http://localhost:5678/webhook/salesfixr/v1/tool/$name" | ConvertTo-Json -Depth 8
-  } catch { "HTTP $($_.Exception.Response.StatusCode.value__): " + $_.ErrorDetails.Message }
-}
+cd F:\Agency\Automation_MVP
+. .\tests\sf-helpers.ps1          # the dot and the space at the start matter
+```
+
+You should see `SalesFixr helpers loaded.` **Do this in every new PowerShell
+window.** Variables like `$toolToken` disappear when a window closes. Without the
+helpers, `Invoke-Tool` sends an empty token and every call returns
+`HTTP 401 … "Invalid tool token."` (the tool is right to refuse it).
+
+Quick check that the token was loaded (prints only its length, never the value):
+
+```powershell
+$toolToken.Length        # must be 16 or more, never 0
 ```
 
 Get two patient ids and pick a test slot: a weekday 2+ days ahead, 11:00 New York
@@ -873,6 +1017,14 @@ $patientA = "PASTE-ID-OF-+12125550199"
 $ownerC   = "PASTE-ID-OF-+15550000001"
 $slot     = "PASTE-slot_utc"
 $day      = "PASTE-YYYY-MM-DD"
+```
+
+
+```powershell
+$patientA = "26aaf5e1-6440-40e4-809a-842f0f01ad2c"
+$ownerC   = "8274d3b2-5f9d-49cb-b60b-3c9b81c55360"
+$slot     = "2026-10-14T15:00:00Z"
+$day      = "2026-10-14 (Wednesday)"
 ```
 
 | # | Command | Expect |
@@ -1249,6 +1401,36 @@ return [{ json: { ...plan, action_status: status, reason_code: res?.ok ? 'ok' : 
                   reply_text: reply, reply_source: 'template' } }];
 ```
 
+### Wiring table — the WF-02 changes in F7
+
+Draw exactly these connections, and nothing else. "→" means: drag from the **output** dot on the right of the first node to the **input** dot on the left of the second.
+
+| # | From (output) | To (input) |
+|---|---|---|
+| 1 | `SW Route By Action` output **book** (new) | `FN Build Booking Request` |
+| 2 | `FN Build Booking Request` | `HTTP Tool Book Appointment` |
+| 3 | `HTTP Tool Book Appointment` | `FN Booking Reply` |
+| 4 | `FN Booking Reply` | `FN Finalize Reply` |
+| 5 | `SW Route By Action` output **unrouted** (fallback, now last) | `FN Unrouted` (re-check it after adding the `book` rule) |
+| 6 | `FN Availability Reply` | `PG Save Booking Offer` (replaces its old line to `FN Finalize Reply`) |
+| 7 | `PG Save Booking Offer` | `FN Merge Offer` |
+| 8 | `FN Merge Offer` | `FN Finalize Reply` |
+| 9 | `SW Route By Action` output **escalate** | `FN Build Escalation Request` (the stub is deleted) |
+| 10 | `FN Build Escalation Request` | `HTTP Tool Escalate` |
+| 11 | `HTTP Tool Escalate` | `FN Escalation Reply` |
+| 12 | `FN Escalation Reply` | `FN Finalize Reply` |
+| 13 | `SW Route By Action` output **owner_query** | `FN Build Schedule Request` (replaces its old line to the stub) |
+| 14 | `FN Build Schedule Request` | `IF Is Schedule Request` |
+| 15 | `IF Is Schedule Request` **true** | `HTTP Tool Get Schedule` |
+| 16 | `HTTP Tool Get Schedule` | `FN Schedule Reply` |
+| 17 | `FN Schedule Reply` | `FN Finalize Reply` |
+| 18 | `IF Is Schedule Request` **false** | `FN Stub Owner Query` |
+| 19 | `FN Stub Owner Query` | `FN Finalize Reply` (already there from D) |
+
+Unchanged from D/E: `reply` → `FN Finalize Reply`, `check_availability` → `FN Build Availability Request` → `HTTP Tool Check Availability` → `FN Availability Reply`, `change_booking` → `FN Stub Change Booking` → `FN Finalize Reply`, and `FN Finalize Reply` → `PG Save AI Result` → `FN Return AI Result`.
+
+**Check:** `FN Finalize Reply` now has **8** incoming lines: `reply`, `FN Merge Offer`, `FN Booking Reply`, `FN Stub Change Booking`, `FN Schedule Reply`, `FN Stub Owner Query`, `FN Escalation Reply`, `FN Unrouted`.
+
 **Save → Publish WF-02.**
 
 ---
@@ -1321,7 +1503,7 @@ WHERE created_at > now() - interval '1 hour' AND status IN ('held', 'booked');
 |---|---|
 | "Yes please" gets a clarifying question ("Which service…?") | The model didn't fill the fields from the offer. Check `FN Build Prompt`'s `user_content` for the PENDING OFFER block. Missing → F7.1/F7.2 not done or WF-02 not re-published. Present → the offer expired (30 min) or a newer availability check replaced it |
 | "Yes" triggers a *new* availability check instead of booking | The date/time/service the model returned doesn't exactly match the offer (e.g. `10:00` vs `10:30`). That's the intended safety behaviour; the patient gets a fresh, true answer |
-| Booking says `calendar_unavailable` | GC Create failed: credential expired (7-day Testing limit, E1.2) or wrong calendar id. The hold expires by itself in 5 minutes |
+| Booking says `calendar_unavailable` | GC Create failed: credential expired (7-day Testing limit, E1.2) or wrong calendar id. The held slot is released after 5 minutes by WF-04 housekeeping (Milestone H); before H is built, release it by hand: `UPDATE appointments SET status='cancelled', cancel_reason='hold_expired' WHERE status='held' AND hold_expires_at < now();` |
 | `tool_not_allowed` for a patient booking | The persona row lacks `book_appointment`. `SELECT allowed_tools FROM ai_personas WHERE role='customer';` |
 | Booked, but no Telegram | `clinic_settings.telegram_chat_id` empty, you never messaged the bot first (§6 step 4), or wrong credential. The booking is still valid; that's the On Error → Continue design |
 | Telegram message ends with "sent automatically with n8n" | *Append n8n Attribution* still on |

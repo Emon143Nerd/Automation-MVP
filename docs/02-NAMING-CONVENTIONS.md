@@ -25,6 +25,7 @@ breaks at 11 PM before a client demo, names are the only thing that saves you.
 |---|---|---|
 | `WH` | Webhook | `WH Inbound Messenger` |
 | `TRG` | When Executed by Another Workflow (sub-workflow start) | `TRG Called By Workflow` |
+| `SCH` | Schedule Trigger (timer) | `SCH Every 15 Minutes` |
 | `CRY` | Crypto (hash / HMAC) | `CRY Sign Raw Body` |
 | `LOOP` | Loop Over Items | `LOOP Each Message` |
 | `RESP` | Respond to Webhook | `RESP 200 EchoChallenge` |
@@ -62,8 +63,9 @@ Rules:
 | Test inbound (dev) | `/webhook/salesfixr/v1/inbound/test` |
 | Internal normalized inbound (adapters → WF-01) | `/webhook/salesfixr/v1/inbound/normalized` |
 | WhatsApp (later) | `/webhook/salesfixr/v1/inbound/whatsapp` |
-| Voice (later) | `/webhook/salesfixr/v1/inbound/voice` |
+| Voice agent tool calls (ElevenLabs → WF-05) | `/webhook/salesfixr/v1/voice/tool` |
 | AI tool endpoints | `/webhook/salesfixr/v1/tool/<tool_name>` |
+| Owner dashboard (WF-12) | `/webhook/salesfixr/v1/dashboard` |
 
 The `v1` is there so you can add `v2` later without breaking a registered Meta webhook.
 
@@ -133,6 +135,8 @@ SF_OLLAMA_BASE_URL
 SF_OLLAMA_MODEL
 SF_TELEGRAM_BOT_TOKEN
 SF_META_PAGE_TOKEN
+SF_INTERNAL_TOKEN      (G: header between WF-11 and WF-01, test scripts)
+SF_VOICE_TOKEN         (I: header ElevenLabs → WF-05)
 ```
 
 ---
@@ -157,6 +161,10 @@ no_slots             calendar_unavailable unknown_tenant
 
 # added in Milestones F and G
 bad_signature        send_failed          channel_unsupported
+
+# added in Milestones H and I (reminders, voice)
+appointment_not_booked  too_late          no_address
+outside_messaging_window  stuck_sending   need_phone
 ```
 
 ---

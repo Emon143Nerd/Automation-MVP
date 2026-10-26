@@ -51,7 +51,7 @@ tier on each signup page before you rely on it; vendor terms move.
 | Public URL | **ngrok** (free static domain) | Free, no card | ⚠️ *see 2.2* |
 | AI model | **Google Gemini Flash** via AI Studio API | Free tier, no card | ⚠️ *changed — see 2.4* |
 | Calendar | **Google Calendar API** | Free | Personal Google account is enough |
-| Channel | **Facebook Messenger** via a Meta app in Development Mode | Free | You already have the account + Page |
+| Channel | **Facebook Messenger + Instagram DMs** via a Meta app in Development Mode, System User token from the Page owner | Free | No Facebook login on your side; same webhook for both |
 | Owner alerts | **Telegram Bot** | Free | Instant, no card, works on your phone |
 | Voice (later) | **ElevenLabs** free tier | Free tier, no card | ⚠️ *see 2.3 — architecture reserved now, built later* |
 | Dashboard (later) | n8n webhooks + a static page, or Next.js on Vercel free | Free | Last milestone |
@@ -156,7 +156,7 @@ Full click-by-click walkthrough in `docs/01-ACCOUNTS-AND-FREE-TIERS.md`. Summary
 | 3 | Google Cloud | OAuth Client ID + Secret for Calendar | Milestone E |
 | 4 | Telegram (@BotFather) | Bot token + your chat id | Milestone F |
 | 5 | ngrok | Authtoken + one static domain | Milestone G |
-| 6 | Meta for Developers | App ID, App Secret, Page Access Token, Verify Token | Milestone G |
+| 6 | Meta (from the Page owner) | App ID, App Secret, System User token, Page ID (`docs/META-ACCESS-HANDOFF.md`) | Milestone G |
 | 7 | ElevenLabs | API key | Milestone I (later) |
 
 Items 2 and 3 are both Google but **different consoles** — AI Studio for the model
@@ -196,10 +196,10 @@ Do not connect five APIs at once — when something breaks you will have no idea
 | **D** | Action router | Switch node routes every intent somewhere | All 14 intents land on a branch, none fall through silently |
 | **E** | Calendar + availability | WF-03 can list free slots and create events | Ask for a taken slot → get 3 real alternatives |
 | **F** | Booking end-to-end | Appointment in Postgres + Calendar, Telegram alert, confirmation reply | The full flow in section 1, steps 1–5 |
-| **G** | Real Messenger channel | ngrok + Meta app wired to WF-01 | Message your Page from your phone, get a real reply |
-| **H** | Reminders | WF-04 on a schedule drains the `reminders` table | Book for tomorrow → reminder row created and fires |
+| **G** | Real Messenger + Instagram channel | ngrok + System User token + WF-11/WF-09 wired to WF-01 | Message the Page and DM the Instagram account from a phone, get real replies |
+| **H** | Reminders | WF-04 on a schedule drains the `reminders` table (quiet hours, Meta 24 h window → owner Telegram fallback) | Book for tomorrow → reminder row created and fires |
 | **I** | Voice (ElevenLabs) | Voice agent using the same tool endpoints | Call the agent, book by voice, same DB row shape |
-| **J** | Dashboard | Read-only views of bookings/inbox/analytics | Shows the booking you just made |
+| **J** | Dashboard | WF-12: server-rendered read-only views of bookings/inbox/analytics/health | Shows the booking you just made |
 
 **MVP = A through H.** I and J are the follow-on.
 
@@ -216,13 +216,14 @@ Eight workflows, never one giant one. Import/export them as JSON into
 | WF-02 | `SF WF-02 AI Conversation` | Execute Workflow | Load persona + context, call LLM, return structured JSON |
 | WF-03 | `SF WF-03 Booking Operations` | Execute Workflow | Availability, hold, book, reschedule, cancel |
 | WF-04 | `SF WF-04 Reminders` | Schedule (every 15 min) | Drain due reminders through the safety gate |
-| WF-05 | `SF WF-05 Voice Handler` | Webhook | ElevenLabs inbound — *Milestone I* |
+| WF-05 | `SF WF-05 Voice Handler` | Webhook | ElevenLabs tool calls → same tools, caller found by phone — *Milestone I* |
 | WF-06 | `SF WF-06 Human Escalation` | Execute Workflow | Flag thread, notify staff, pause the AI. *Built as `SF TOOL escalate_to_human` in F* |
 | WF-07 | `SF WF-07 Daily Report` | Schedule (daily 08:00) | Owner summary to Telegram |
 | WF-08 | `SF WF-08 Error Logger` | Error Trigger | Catch failures from every other workflow |
 | WF-09 | `SF WF-09 Outbound Router` | Execute Workflow | One place that knows how to send on each channel |
 | WF-10 | `SF WF-10 LLM Gateway` | Execute Workflow | **The only node that talks to a model.** Swap Gemini→OpenAI/Ollama here |
 | WF-11 | `SF WF-11 Messenger Channel` | Webhook | Messenger adapter: verify signature, dedupe, call WF-01, send via WF-09 *(added in G)* |
+| WF-12 | `SF WF-12 Dashboard` | Webhook (GET, Basic Auth) | Read-only owner dashboard: bookings, inbox, analytics, health *(added in J)* |
 | WF-T* | `SF TOOL <name>` | Webhook | One per AI tool — see `docs/04-TOOL-API.md` |
 
 Two of these are what make the "replaceable providers" principle real:
